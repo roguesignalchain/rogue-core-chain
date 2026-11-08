@@ -19,6 +19,7 @@ import (
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/rpc"
+	"github.com/ethereum/go-ethereum/trie"
 	"golang.org/x/crypto/sha3"
 )
 
@@ -131,6 +132,35 @@ func (rx *RandomX) SetThreads(threads int) {
 	rx.threads = threads
 }
 
+// headerChainReader wraps a ChainHeaderReader with an in-memory batch of headers
+// so ancestors within the batch can be resolved before they are committed to the chain database.
+type headerChainReader struct {
+	consensus.ChainHeaderReader
+	byHash   map[common.Hash]*types.Header
+	byNumber map[uint64]*types.Header
+}
+
+func (r *headerChainReader) GetHeader(hash common.Hash, number uint64) *types.Header {
+	if h, ok := r.byHash[hash]; ok {
+		return h
+	}
+	return r.ChainHeaderReader.GetHeader(hash, number)
+}
+
+func (r *headerChainReader) GetHeaderByHash(hash common.Hash) *types.Header {
+	if h, ok := r.byHash[hash]; ok {
+		return h
+	}
+	return r.ChainHeaderReader.GetHeaderByHash(hash)
+}
+
+func (r *headerChainReader) GetHeaderByNumber(number uint64) *types.Header {
+	if h, ok := r.byNumber[number]; ok {
+		return h
+	}
+	return r.ChainHeaderReader.GetHeaderByNumber(number)
+}
+
 // Author implements consensus.Engine, returning the block coinbase.
 func (rx *RandomX) Author(header *types.Header) (common.Address, error) {
 	return header.Coinbase, nil
@@ -149,6 +179,11 @@ func (rx *RandomX) VerifyHeader(chain consensus.ChainHeaderReader, header *types
 		return consensus.ErrUnknownAncestor
 	}
 
+	return rx.verifyHeader(chain, header, parent, seal)
+}
+
+// verifyHeader performs full header validation given an already resolved parent header.
+func (rx *RandomX) verifyHeader(chain consensus.ChainHeaderReader, header, parent *types.Header, seal bool) error {
 	// 1. Verify strict timestamp rules (MTP-11 + max 15s future drift)
 	now := uint64(time.Now().Unix())
 	if err := VerifyHeaderTime(chain, header, parent, now); err != nil {
@@ -181,9 +216,48 @@ func (rx *RandomX) VerifyHeaders(chain consensus.ChainHeaderReader, headers []*t
 	abort := make(chan struct{})
 	results := make(chan error, len(headers))
 
+	if len(headers) == 0 {
+		return abort, results
+	}
+
+	byHash := make(map[common.Hash]*types.Header, len(headers))
+	byNumber := make(map[uint64]*types.Header, len(headers))
+	for _, h := range headers {
+		byHash[h.Hash()] = h
+		byNumber[h.Number.Uint64()] = h
+	}
+	batchReader := &headerChainReader{
+		ChainHeaderReader: chain,
+		byHash:            byHash,
+		byNumber:          byNumber,
+	}
+
 	go func() {
 		for i, header := range headers {
-			err := rx.VerifyHeader(chain, header, seals[i])
+			number := header.Number.Uint64()
+			var parent *types.Header
+			if number == 0 {
+				select {
+				case <-abort:
+					return
+				case results <- nil:
+				}
+				continue
+			}
+
+			if i > 0 && headers[i-1].Hash() == header.ParentHash {
+				parent = headers[i-1]
+			} else {
+				parent = batchReader.GetHeader(header.ParentHash, number-1)
+			}
+
+			var err error
+			if parent == nil {
+				err = consensus.ErrUnknownAncestor
+			} else {
+				err = rx.verifyHeader(batchReader, header, parent, seals[i])
+			}
+
 			select {
 			case <-abort:
 				return
@@ -234,8 +308,8 @@ func (rx *RandomX) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header
 	rx.Finalize(chain, header, state, txs, uncles, withdrawals)
 	header.Root = state.IntermediateRoot(true)
 
-	// Assemble block without uncles
-	return types.NewBlock(header, txs, nil, receipts, nil), nil
+	// Assemble block without uncles using StackTrie hasher for tx and receipt trees
+	return types.NewBlock(header, txs, nil, receipts, trie.NewStackTrie(nil)), nil
 }
 
 // SealHash calculates the pre-seal hash of the block header using Ethereum RLP encoding.

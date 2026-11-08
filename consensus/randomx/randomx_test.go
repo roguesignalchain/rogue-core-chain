@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 )
 
@@ -127,5 +129,102 @@ func TestSealAndVerifySealIntegration(t *testing.T) {
 	tamperedHeader.Nonce = types.EncodeNonce(sealedHeader.Nonce.Uint64() + 1)
 	if err := rx.VerifySeal(chain, tamperedHeader); err == nil {
 		t.Error("VerifySeal accepted tampered nonce")
+	}
+}
+
+func TestVerifyHeadersBatch(t *testing.T) {
+	chain := NewFakeChainReader()
+
+	// Genesis header
+	genesis := &types.Header{
+		Number:     big.NewInt(0),
+		Time:       1000,
+		Difficulty: big.NewInt(0x10000),
+	}
+	chain.AddHeader(genesis)
+
+	rx := New(Config{FastMode: false, Threads: 1})
+	defer rx.Close()
+
+	// Create a chain of 3 headers where each parent is the previous header in the batch
+	h1 := &types.Header{
+		ParentHash: genesis.Hash(),
+		Number:     big.NewInt(1),
+		Time:       genesis.Time + 10,
+		GasLimit:   60000000,
+	}
+	h1.Difficulty = CalculateDifficulty(chain, h1.Time, genesis)
+
+	h2 := &types.Header{
+		ParentHash: h1.Hash(),
+		Number:     big.NewInt(2),
+		Time:       h1.Time + 10,
+		GasLimit:   60000000,
+	}
+	// For difficulty of h2, h1 is parent
+	h2.Difficulty = h1.Difficulty // when LWMA has only h1, falls back or computes from h1
+
+	h3 := &types.Header{
+		ParentHash: h2.Hash(),
+		Number:     big.NewInt(3),
+		Time:       h2.Time + 10,
+		GasLimit:   60000000,
+	}
+	h3.Difficulty = h2.Difficulty
+
+	headers := []*types.Header{h1, h2, h3}
+	seals := []bool{false, false, false}
+
+	// In the old code, h2 and h3 failed with ErrUnknownAncestor because neither h1 nor h2 was in chain
+	abort, results := rx.VerifyHeaders(chain, headers, seals)
+	defer close(abort)
+
+	for _, header := range headers {
+		err := <-results
+		if err != nil {
+			t.Fatalf("Header #%d (%s) failed verification: %v", header.Number.Uint64(), header.Hash().Hex(), err)
+		}
+	}
+}
+
+func TestFinalizeAndAssembleWithTransactions(t *testing.T) {
+	chain := NewFakeChainReader()
+	rx := New(Config{FastMode: false, Threads: 1})
+	defer rx.Close()
+
+	header := &types.Header{
+		Number:     big.NewInt(1),
+		Time:       1010,
+		Coinbase:   common.HexToAddress("0x1111111111111111111111111111111111111111"),
+		Difficulty: big.NewInt(1000),
+	}
+
+	statedb, err := state.New(common.Hash{}, state.NewDatabase(rawdb.NewMemoryDatabase()), nil)
+	if err != nil {
+		t.Fatalf("Failed to create statedb: %v", err)
+	}
+
+	tx := types.NewTx(&types.LegacyTx{
+		Nonce:    0,
+		To:       &common.Address{},
+		Value:    big.NewInt(1000),
+		Gas:      21000,
+		GasPrice: big.NewInt(1),
+	})
+	receipt := &types.Receipt{
+		Status:            types.ReceiptStatusSuccessful,
+		CumulativeGasUsed: 21000,
+	}
+
+	block, err := rx.FinalizeAndAssemble(chain, header, statedb, []*types.Transaction{tx}, nil, []*types.Receipt{receipt}, nil)
+	if err != nil {
+		t.Fatalf("FinalizeAndAssemble failed: %v", err)
+	}
+
+	if len(block.Transactions()) != 1 {
+		t.Fatalf("Expected 1 transaction in block, got %d", len(block.Transactions()))
+	}
+	if block.Header().TxHash == types.EmptyTxsHash {
+		t.Errorf("TxHash must not be empty when transactions are present")
 	}
 }
