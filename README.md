@@ -1,3 +1,126 @@
+# Core-Rogue (Rogue Signal)
+
+> Official Go node implementation for **Rogue Signal (ROGUE)** — an ASIC-resistant Proof-of-Work EVM blockchain powered by **RandomX (`rx/0`)**.
+> Based on [etclabscore/core-geth](https://github.com/etclabscore/core-geth).
+
+---
+
+## 🚀 Overview & Specifications
+
+| Parameter | Value | Details |
+| :--- | :--- | :--- |
+| **Network Name** | Rogue Signal | Official network name |
+| **Native Currency** | ROGUE | 18 decimals (`10^18` wei per ROGUE) |
+| **Chain ID** | `800055` | Strict EIP-155 replay protection from block 0 |
+| **Mining Algorithm**| **RandomX (`rx/0`)** | Monero standard profile (100% compatible with XMRig) |
+| **Memory Profile** | **Light Mode (~256 MB RAM) by default** | Low-end PC friendly; optional Fast Mode (~2.08 GB RAM) via `--randomx.fast` |
+| **Block Target Time** | **10 seconds** | High responsiveness for DeFi and smart contracts |
+| **Gas Limit** | **60,000,000** per block | High throughput without choking CPU nodes |
+| **Difficulty Algorithm** | **LWMA-1** ($N=60$) | Linear Weighted Moving Average with bootstrap scaling $k=\min(60, H)$ |
+| **Target Clamping** | **$\pm 33\%$ per block** | Clamps adjustment to $[67\%, 133\%]$ to prevent hashrate oscillation attacks |
+| **Genesis Difficulty** | `0x10000` (65,536) | Min difficulty threshold for rapid dev startup and CI tests |
+| **Timestamp Rules** | **Strict MTP-11** | Block time must exceed Past Median Time of last 11 blocks; max 15s future drift |
+| **Total Max Supply** | **100,000,000 ROGUE** | Mathematical hard cap across 32 halving eras (zero tail emission) |
+| **Initial Block Reward**| **8 ROGUE** | Halving every 6,300,000 blocks (~2 years at 10s/block) |
+| **Reward Split** | **95% Miner / 5% Protocol Treasury** | 7.6 ROGUE to miner, 0.4 ROGUE to protocol treasury per block |
+| **Treasury Address** | Configurable in `genesis.json` | Default fallback `0x8000550000000000000000000000000000800055` |
+| **Uncle Blocks** | **Strictly Forbidden (0%)** | Uncles rejected (`ErrUnclesNotAllowed`), simplifying consensus |
+| **Seed Rotation** | Every 2048 blocks (~5.7h) | Seed lag of 64 blocks (~10m) for background cache precomputation |
+| **Cache Retention** | 128 blocks (~20m) | Retains previous epoch cache to validate chain reorgs seamlessly |
+| **SealHash Format** | RLP(Header without Nonce & MixDigest) | Evaluates canonical Ethereum header serialization |
+| **MixDigest** | 32-byte RandomX hash | Direct inclusion proof stored in header |
+| **Default Ports** | P2P: `38888` \| HTTP RPC: `38845` \| WS: `38846` \| Stratum: `3333` | Non-conflicting dedicated ports |
+
+---
+
+## 🛠️ Building Core-Rogue (Native, No Docker)
+
+Core-Rogue embeds the C++ RandomX engine via CGO. It compiles into a 100% self-contained static executable.
+
+### Prerequisites
+
+* **Go**: `1.24+` (or latest stable)
+* **CMake**: `3.15+`
+* **C/C++ Compiler**: GCC/G++ or Clang
+
+### 1. Clone with Submodules
+
+```bash
+git clone --recurse-submodules https://github.com/roguesignalchain/core-rogue.git
+cd core-rogue
+```
+
+If already cloned without submodules:
+```bash
+git submodule update --init --recursive
+```
+
+### 2. Build on Linux (Ubuntu, Debian, Fedora, Arch)
+
+```bash
+# Install dependencies (Ubuntu/Debian)
+sudo apt-get update
+sudo apt-get install -y build-essential cmake
+
+# Compile RandomX static library and core-rogue executable
+make core-rogue
+```
+The executable will be generated at `./build/bin/core-rogue`.
+
+### 3. Build on macOS (Apple Silicon & Intel)
+
+```bash
+# Install dependencies via Homebrew
+brew install go cmake
+
+# Compile
+make core-rogue
+```
+
+### 4. Build on Windows (Native with MinGW-w64)
+
+1. Install [Go for Windows](https://go.dev/dl/) and [CMake](https://cmake.org/download/).
+2. Install [MinGW-w64](https://www.mingw-w64.org/) (ensure `gcc`, `g++`, and `mingw32-make` are in your `PATH`).
+3. Compile:
+```cmd
+mingw32-make core-rogue
+```
+
+---
+
+## 🔄 Upstream Synchronization
+
+Core-Rogue maintains compatibility with upstream [etclabscore/core-geth](https://github.com/etclabscore/core-geth) to seamlessly inherit security patches and EVM upgrades.
+
+Git remotes are structured as follows:
+* `origin` -> `https://github.com/roguesignalchain/core-rogue.git` (this repository)
+* `upstream` -> `https://github.com/etclabscore/core-geth.git` (upstream Core-Geth)
+
+To pull in updates from upstream:
+```bash
+# Fetch upstream branches
+git fetch upstream master
+
+# Merge or rebase updates
+git merge upstream/master
+```
+
+To update the RandomX submodule to the latest upstream release:
+```bash
+git submodule update --remote --recursive
+```
+
+---
+
+## ⛏️ Mining Architecture
+
+Mining on Rogue Signal is decoupled from the node process for maximum efficiency:
+* **Mining Algorithm**: RandomX `rx/0` (standard Monero profile).
+* **Software**: Standard CPU miners (e.g. **XMRig**).
+* **Stratum Bridge**: Nodes expose RPC; a dedicated bridge service (`rogue-stratum`) connects XMRig miners to `core-rogue` via JSON-RPC.
+
+---
+
 # CoreGeth
 
 > A Go client for Ethereum Classic, based on [go-ethereum](https://github.com/ethereum/go-ethereum).

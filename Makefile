@@ -2,15 +2,40 @@
 # with Go source code. If you know what GOPATH is then you probably
 # don't need to bother with make.
 
-.PHONY: geth android ios geth-cross evm evmc mkdocs-serve all test clean
+.PHONY: geth android ios geth-cross evm evmc mkdocs-serve all test clean randomx librandomx core-rogue
 
 GOBIN = ./build/bin
 GO ?= latest
 GORUN = go run
 ROOT_DIR := $(shell dirname $(realpath $(firstword $(MAKEFILE_LIST))))
 
+RANDOMX_LIB = ./consensus/randomx/lib/librandomx.a
+RANDOMX_SRC = ./consensus/randomx/randomx-src
+
+#? librandomx: Build RandomX C++ static library
+randomx: librandomx
+librandomx: $(RANDOMX_LIB)
+
+$(RANDOMX_LIB):
+	@if [ ! -f "$(RANDOMX_SRC)/CMakeLists.txt" ]; then \
+		echo "Initializing RandomX submodule..."; \
+		git submodule update --init --recursive consensus/randomx/randomx-src; \
+	fi
+	@echo "Building RandomX static library..."
+	@mkdir -p $(RANDOMX_SRC)/build
+	@cd $(RANDOMX_SRC)/build && cmake -DARCH=native -DCMAKE_BUILD_TYPE=Release .. && $(MAKE)
+	@mkdir -p ./consensus/randomx/lib
+	@cp $(RANDOMX_SRC)/build/librandomx.a $(RANDOMX_LIB)
+	@echo "RandomX static library successfully built: $(RANDOMX_LIB)"
+
+#? core-rogue: Build Rogue Signal node executable
+core-rogue: geth
+	@cp $(GOBIN)/geth $(GOBIN)/core-rogue
+	@echo "Done building Rogue Signal node."
+	@echo "Run \"$(GOBIN)/core-rogue\" to launch."
+
 #? geth: Build geth
-geth:
+geth: $(RANDOMX_LIB)
 	$(GORUN) build/ci.go install ./cmd/geth
 	@echo "Done building."
 	@echo "Run \"$(GOBIN)/geth\" to launch geth."
@@ -102,6 +127,8 @@ lint: ## Run linters.
 clean:
 	go clean -cache
 	rm -fr build/_workspace/pkg/ $(GOBIN)/*
+	rm -f $(RANDOMX_LIB)
+	rm -rf $(RANDOMX_SRC)/build
 
 mkdocs-serve: ## Serve generated documentation (during development)
 	@build/mkdocs-serve.sh
