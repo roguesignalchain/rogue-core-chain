@@ -190,11 +190,15 @@ cd core-rogue
 
 # 2. Build the RandomX static library and core-rogue binary
 make core-rogue
+
+# 3. (Optional) Build the Rogue Signal Stratum bridge for XMRig
+make rogue-stratum
 ```
 
-The resulting standalone executable is generated at:
+The resulting standalone executables are generated at:
 ```bash
-./build/bin/core-rogue
+./build/bin/core-rogue       # Node daemon
+./build/bin/rogue-stratum    # Stratum v1 mining bridge
 ```
 
 ### Compilation on macOS
@@ -230,9 +234,13 @@ To run the complete suite of RandomX unit tests, official vector validations, an
 # Test all consensus/randomx packages
 cd consensus/randomx
 CGO_ENABLED=1 go test -v .
+cd ../..
+
+# Test the Stratum v1 bridge
+go test -v ./cmd/rogue-stratum/...
 
 # Run specific test suites
-CGO_ENABLED=1 go test -v -run TestOfficialRandomXVectorsLightMode  # Official RandomX test vectors
+CGO_ENABLED=1 go test -v -run TestOfficialRandomXVectorsLightMode ./consensus/randomx  # Official RandomX test vectors
 CGO_ENABLED=1 go test -v -run TestConcurrentHashing               # Thread-safety VM pool test
 CGO_ENABLED=1 go test -v -run TestDifficultyTargetConversion      # Target & difficulty math
 CGO_ENABLED=1 go test -v -run TestLWMAAdjusts                     # LWMA-1 difficulty adjustment
@@ -351,6 +359,62 @@ admin.peers
 
 // Check transaction pool status
 txpool.status
+```
+
+---
+
+## ⛏️ Stratum Mining with XMRig (`cmd/rogue-stratum`)
+
+Rogue Signal includes an official Stratum v1 protocol bridge located at [`cmd/rogue-stratum`](cmd/rogue-stratum). It translates between standard Monero RandomX (`rx/0`) miners (such as **unmodified official XMRig**) and the node's EVM block sealing engine.
+
+### 1. Build the Stratum Bridge
+```bash
+make rogue-stratum
+```
+This produces `./build/bin/rogue-stratum`.
+
+### 2. Start the Node in Remote Sealing Mode
+Launch `core-rogue` with mining enabled and zero local CPU threads (delegating 100% of hashing to Stratum miners):
+```bash
+./build/bin/core-rogue \
+  --datadir /path/to/data \
+  --rogue \
+  --mine \
+  --miner.threads 0 \
+  --miner.etherbase "0xYourPayoutAddress" \
+  --http \
+  --http.port 38845 \
+  --http.api "eth,net,web3,randomx"
+```
+
+### 3. Launch the Stratum Bridge
+```bash
+./build/bin/rogue-stratum \
+  --stratum.host 0.0.0.0 \
+  --stratum.port 3333 \
+  --node.rpc http://127.0.0.1:38845 \
+  --diff 1000
+```
+
+### 4. Connect Official XMRig
+Run official XMRig on any machine:
+```bash
+xmrig -o 127.0.0.1:3333 -u 0xYourPayoutAddress.worker1 -p x -a rx/0
+```
+
+Or configure via `config.json`:
+```json
+{
+  "pools": [
+    {
+      "algo": "rx/0",
+      "url": "127.0.0.1:3333",
+      "user": "0xYourPayoutAddress.worker1",
+      "pass": "x",
+      "keepalive": true
+    }
+  ]
+}
 ```
 
 ---

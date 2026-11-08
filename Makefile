@@ -2,7 +2,7 @@
 # with Go source code. If you know what GOPATH is then you probably
 # don't need to bother with make.
 
-.PHONY: geth android ios geth-cross evm evmc mkdocs-serve all test clean randomx librandomx core-rogue
+.PHONY: geth android ios geth-cross evm evmc mkdocs-serve all test clean randomx librandomx core-rogue rogue-stratum
 
 GOBIN = ./build/bin
 GO ?= latest
@@ -33,6 +33,12 @@ core-rogue: geth
 	@cp $(GOBIN)/geth $(GOBIN)/core-rogue
 	@echo "Done building Rogue Signal node."
 	@echo "Run \"$(GOBIN)/core-rogue\" to launch."
+
+#? rogue-stratum: Build Rogue Signal Stratum bridge for XMRig
+rogue-stratum:
+	$(GORUN) build/ci.go install ./cmd/rogue-stratum
+	@echo "Done building Rogue Signal Stratum bridge."
+	@echo "Run \"$(GOBIN)/rogue-stratum\" to launch."
 
 #? geth: Build geth
 geth: $(RANDOMX_LIB)
