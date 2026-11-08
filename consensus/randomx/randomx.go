@@ -38,35 +38,42 @@ type RandomX struct {
 	treasury common.Address
 
 	epochs *EpochManager
+	remote *remoteSealer
 
 	lock sync.RWMutex
 }
 
 // Config defines the configuration options for RandomX consensus engine.
 type Config struct {
-	FastMode bool
-	Threads  int
-	Treasury common.Address
+	FastMode   bool
+	Threads    int
+	Treasury   common.Address
+	NotifyURLs []string
+	NoVerify   bool
 }
 
 // New creates a full RandomX consensus engine.
 func New(cfg Config) *RandomX {
-	threads := cfg.Threads
-	if threads <= 0 {
-		threads = 1 // Default to 1 thread in light mode to protect low-spec machines
-	}
-
 	treasury := cfg.Treasury
 	if treasury == (common.Address{}) {
 		treasury = DefaultTreasuryAddress
 	}
 
-	return &RandomX{
+	rx := &RandomX{
 		fastMode: cfg.FastMode,
-		threads:  threads,
+		threads:  cfg.Threads,
 		treasury: treasury,
 		epochs:   NewEpochManager(cfg.FastMode),
 	}
+	rx.remote = startRemoteSealer(rx, cfg.NotifyURLs, cfg.NoVerify)
+	return rx
+}
+
+// SetThreads updates the number of mining threads dynamically (-1 to disable local mining).
+func (rx *RandomX) SetThreads(threads int) {
+	rx.lock.Lock()
+	defer rx.lock.Unlock()
+	rx.threads = threads
 }
 
 // Author implements consensus.Engine, returning the block coinbase.
@@ -205,11 +212,18 @@ func (rx *RandomX) SealHash(header *types.Header) common.Hash {
 	return hash
 }
 
-// MiningInput serializes SealHash(header) and the 64-bit Nonce into a 40-byte RandomX mining blob.
+// MiningBlobSize defines the canonical 76-byte RandomX mining blob (Monero/rx0 standard).
+const MiningBlobSize = 76
+
+// MiningInput serializes SealHash(header) and the 64-bit Nonce into a standard 76-byte RandomX mining blob.
+// Offset 0..31: SealHash (32 bytes)
+// Offset 32..38: Extra nonce / reserved (7 bytes)
+// Offset 39..46: Nonce uint64 (8 bytes, little-endian; bytes 39..42 match standard XMRig 32-bit nonce)
+// Offset 47..75: Padding (29 bytes)
 func MiningInput(sealHash common.Hash, nonce uint64) []byte {
-	input := make([]byte, 40)
+	input := make([]byte, MiningBlobSize)
 	copy(input[:32], sealHash.Bytes())
-	binary.LittleEndian.PutUint64(input[32:], nonce)
+	binary.LittleEndian.PutUint64(input[39:], nonce)
 	return input
 }
 
@@ -248,10 +262,25 @@ func (rx *RandomX) VerifySeal(chain consensus.ChainHeaderReader, header *types.H
 	return nil
 }
 
-// Seal implements the built-in miner loop for testing and single-node block generation.
+// Seal implements the consensus.Engine interface, coordinating local CPU miner threads and remote Stratum miners.
 func (rx *RandomX) Seal(chain consensus.ChainHeaderReader, block *types.Block, results chan<- *types.Block, stop <-chan struct{}) error {
 	header := block.Header()
 	number := header.Number.Uint64()
+
+	// Push new work to remote sealer for Stratum / RPC external miners
+	if rx.remote != nil {
+		rx.remote.workCh <- &sealTask{block: block, results: results, chain: chain}
+	}
+
+	rx.lock.RLock()
+	threads := rx.threads
+	rx.lock.RUnlock()
+
+	// If local CPU mining is disabled (e.g. delegated entirely to Stratum / XMRig), wait for completion
+	if threads <= 0 {
+		<-stop
+		return nil
+	}
 
 	ctx, err := rx.epochs.GetContext(number, chain)
 	if err != nil {
@@ -260,11 +289,6 @@ func (rx *RandomX) Seal(chain consensus.ChainHeaderReader, block *types.Block, r
 
 	target := DifficultyToTarget(header.Difficulty)
 	sealHash := rx.SealHash(header)
-
-	threads := rx.threads
-	if threads < 1 {
-		threads = 1
-	}
 
 	var (
 		foundNonce uint64
@@ -342,13 +366,25 @@ func (rx *RandomX) CalcDifficulty(chain consensus.ChainHeaderReader, time uint64
 	return CalculateDifficulty(chain, time, parent)
 }
 
-// APIs returns consensus RPC APIs.
+// APIs returns consensus RPC APIs for eth and randomx namespaces.
 func (rx *RandomX) APIs(chain consensus.ChainHeaderReader) []rpc.API {
-	return nil
+	return []rpc.API{
+		{
+			Namespace: "eth",
+			Service:   &API{rx: rx, chain: chain},
+		},
+		{
+			Namespace: "randomx",
+			Service:   &API{rx: rx, chain: chain},
+		},
+	}
 }
 
-// Close releases all RandomX caches and memory.
+// Close releases all RandomX caches, remote sealer, and memory.
 func (rx *RandomX) Close() error {
+	if rx.remote != nil {
+		rx.remote.close()
+	}
 	rx.epochs.Close()
 	return nil
 }

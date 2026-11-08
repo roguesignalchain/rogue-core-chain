@@ -247,7 +247,12 @@ func CreateConsensusEngine(stack *node.Node, ethashConfig *ethash.Config, clique
 	} else if lyra2Config != nil {
 		engine = lyra2.New(lyra2Config, notify, noverify)
 	} else if randomxConfig != nil {
-		engine = randomx.New(*randomxConfig)
+		cfg := *randomxConfig
+		cfg.NotifyURLs = notify
+		cfg.NoVerify = noverify
+		rxEngine := randomx.New(cfg)
+		rxEngine.SetThreads(-1) // Disable CPU mining by default until explicitly enabled
+		engine = rxEngine
 	} else {
 		switch ethashConfig.PowMode {
 		case ethash.ModeFake:
