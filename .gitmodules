@@ -10,3 +10,6 @@
 	path = tests/testdata-etc
 	url = https://github.com/etclabscore/tests
 	shallow = true
+[submodule "consensus/randomx/randomx-src"]
+	path = consensus/randomx/randomx-src
+	url = https://github.com/tevador/RandomX.git

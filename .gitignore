@@ -60,3 +60,10 @@ les/transactions.rlp
 /MANIFEST
 /manifest.json
 /site
+
+# RandomX build artifacts
+consensus/randomx/lib/*.a
+consensus/randomx/randomx-src/build/
+
+# Local agent guidelines
+AGENTS.md
