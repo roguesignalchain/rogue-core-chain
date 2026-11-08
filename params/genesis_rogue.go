@@ -8,7 +8,7 @@ import (
 
 var (
 	// RogueGenesisHash will be populated with the deterministic hash of the genesis block.
-	RogueGenesisHash = common.Hash{}
+	RogueGenesisHash = common.HexToHash("0xfbdc7475ccccde5a3cf5d63df2f3e2b0727bdef4471626bd5c2c50b35b8a1a27")
 )
 
 // DefaultRogueGenesisBlock returns the official genesis block specification for Rogue Signal.
@@ -16,6 +16,7 @@ func DefaultRogueGenesisBlock() *genesisT.Genesis {
 	return &genesisT.Genesis{
 		Config:     RogueChainConfig,
 		Nonce:      0,
+		Coinbase:   RogueTreasuryAddress,
 		ExtraData:  []byte("Rogue Signal Genesis 2026"),
 		GasLimit:   60000000,
 		Difficulty: hexutil.MustDecodeBig("0x10000"), // Starting test difficulty (65,536)

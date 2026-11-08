@@ -356,6 +356,9 @@ func checkMainnet(ctx *cli.Context) bool {
 	case ctx.IsSet(utils.MintMeFlag.Name):
 		log.Info("Starting Geth on MintMe.com Coin mainnet...")
 
+	case ctx.IsSet(utils.RogueFlag.Name):
+		log.Info("Starting Geth on Rogue Signal network...")
+
 	case !ctx.IsSet(utils.NetworkIdFlag.Name):
 		log.Info("Starting Geth on Ethereum mainnet...")
 		isMainnet = true
