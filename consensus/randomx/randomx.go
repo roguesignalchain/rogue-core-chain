@@ -129,6 +129,19 @@ func (rx *RandomX) SetThreads(threads int) {
 	rx.threads = threads
 }
 
+// SetFastMode dynamically switches between RandomX Light Mode (~256MB) and Fast Mode (~2.08GB).
+func (rx *RandomX) SetFastMode(fastMode bool) {
+	rx.lock.Lock()
+	rx.fastMode = fastMode
+	rx.lock.Unlock()
+	rx.epochs.SetFastMode(fastMode)
+}
+
+// IsFastMode returns true if RandomX Fast Mode (~2.08GB) is currently active.
+func (rx *RandomX) IsFastMode() bool {
+	return rx.epochs.IsFastMode()
+}
+
 // headerChainReader wraps a ChainHeaderReader with an in-memory batch of headers
 // so ancestors within the batch can be resolved before they are committed to the chain database.
 type headerChainReader struct {

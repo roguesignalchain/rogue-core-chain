@@ -40,6 +40,20 @@ func NewEpochManager(fastMode bool) *EpochManager {
 	}
 }
 
+// SetFastMode updates the memory mode (Light Mode ~256MB vs Fast Mode ~2.08GB) dynamically.
+func (em *EpochManager) SetFastMode(fastMode bool) {
+	em.mu.Lock()
+	defer em.mu.Unlock()
+	em.fastMode = fastMode
+}
+
+// IsFastMode returns true if Fast Mode (~2.08GB dataset) is enabled.
+func (em *EpochManager) IsFastMode() bool {
+	em.mu.RLock()
+	defer em.mu.RUnlock()
+	return em.fastMode
+}
+
 // EpochNumber calculates the epoch index for a given block number.
 func EpochNumber(blockNum uint64) uint64 {
 	return blockNum / EpochLength
@@ -88,8 +102,9 @@ func (em *EpochManager) GetContext(blockNum uint64, chain consensus.ChainHeaderR
 
 	em.mu.RLock()
 	ctx, exists := em.contexts[epoch]
+	targetFast := em.fastMode
 	em.mu.RUnlock()
-	if exists {
+	if exists && ctx.fastMode == targetFast {
 		return ctx, nil
 	}
 
@@ -102,7 +117,7 @@ func (em *EpochManager) GetContext(blockNum uint64, chain consensus.ChainHeaderR
 	defer em.mu.Unlock()
 
 	// Double check under write lock
-	if ctx, exists = em.contexts[epoch]; exists {
+	if ctx, exists = em.contexts[epoch]; exists && ctx.fastMode == em.fastMode {
 		return ctx, nil
 	}
 
