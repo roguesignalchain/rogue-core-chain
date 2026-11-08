@@ -1,5 +1,7 @@
 # Core-Rogue (Rogue Signal Node)
 
+![Rogue Signal Node](cover-core.png)
+
 > Official Go client and node implementation for **Rogue Signal (ROGUE)** — a high-performance, ASIC-resistant Proof-of-Work EVM blockchain powered by **RandomX (`rx/0`)**.
 > Built downstream from [etclabscore/core-geth](https://github.com/etclabscore/core-geth) to maintain 100% upstream EVM compatibility and long-term protocol upgradability.
 
@@ -31,7 +33,7 @@
   - [Testing with `curl`](#testing-with-curl)
   - [Connecting with MetaMask](#connecting-with-metamask)
   - [Foundry / Hardhat Integration](#foundry--hardhat-integration)
-- [Mining & Stratum Architecture](#-mining--stratum-architecture)
+- [Egalitarian Home CPU Mining Architecture](#-egalitarian-home-cpu-mining-architecture)
 - [Upstream Synchronization & Git Hygiene](#-upstream-synchronization--git-hygiene)
 
 ---
@@ -43,9 +45,9 @@
 | **Network Name** | **Rogue Signal** | Canonical network designation |
 | **Native Currency** | **ROGUE** | 18 decimals (`10^18` wei per ROGUE) |
 | **Chain ID** | **`800055`** | Strict EIP-155 replay protection active from block 0 |
-| **Mining Algorithm**| **RandomX (`rx/0`)** | Monero standard profile (100% compatible with official XMRig) |
-| **Default RAM Profile**| **Light Mode (~256 MB RAM)** | Optimized for low-end CPUs and hardware with limited RAM |
-| **Optional RAM Profile**| **Fast Mode (~2.08 GB RAM)** | Activated via `--randomx.fast` for dedicated servers / pools |
+| **Mining Algorithm**| **RandomX (`rx/0`)** | Native ASIC/GPU-resistant CPU Proof-of-Work |
+| **Default RAM Profile**| **Light Mode (~256 MB RAM)** | Default profile optimized for home computers and low-memory hardware |
+| **Optional RAM Profile**| **Fast Mode (~2.08 GB RAM)** | Activated via `--randomx.fast` or RPC `randomx_setFastMode` |
 | **Block Target Time** | **10 seconds** | High responsiveness for DeFi, AMMs, and dApps |
 | **Gas Limit** | **60,000,000** per block | High transaction bandwidth without causing state bloat |
 | **Difficulty Algorithm** | **LWMA-1** ($N=60$) | Linear Weighted Moving Average with bootstrap scaling $k=\min(60, H)$ |
@@ -65,7 +67,7 @@
 | **Default P2P Port** | **`38888`** | Dedicated port avoiding Ethereum/ETC discovery collisions |
 | **Default HTTP RPC** | **`38845`** | Dedicated JSON-RPC HTTP port |
 | **Default WS RPC** | **`38846`** | Dedicated WebSocket port |
-| **Default Stratum** | **`3333`** | Dedicated Stratum mining port for CPU miners |
+| **Remote Mining RPC** | **Disabled** | `eth_getWork` and `eth_submitWork` are disabled to block Stratum pools and rigs |
 | **EVM Fork Base** | **Cancun / Shanghai** | `PUSH0`, `MCOPY`, `TSTORE/TLOAD` enabled from block 0 (no blob bloat) |
 
 ---
@@ -190,15 +192,11 @@ cd core-rogue
 
 # 2. Build the RandomX static library and core-rogue binary
 make core-rogue
-
-# 3. (Optional) Build the Rogue Signal Stratum bridge for XMRig
-make rogue-stratum
 ```
 
-The resulting standalone executables are generated at:
+The resulting standalone executable is generated at:
 ```bash
-./build/bin/core-rogue       # Node daemon
-./build/bin/rogue-stratum    # Stratum v1 mining bridge
+./build/bin/core-rogue       # Node daemon with built-in RandomX CPU miner
 ```
 
 ### Compilation on macOS
@@ -235,9 +233,6 @@ To run the complete suite of RandomX unit tests, official vector validations, an
 cd consensus/randomx
 CGO_ENABLED=1 go test -v .
 cd ../..
-
-# Test the Stratum v1 bridge
-go test -v ./cmd/rogue-stratum/...
 
 # Run specific test suites
 CGO_ENABLED=1 go test -v -run TestOfficialRandomXVectorsLightMode ./consensus/randomx  # Official RandomX test vectors
@@ -363,62 +358,6 @@ txpool.status
 
 ---
 
-## ⛏️ Stratum Mining with XMRig (`cmd/rogue-stratum`)
-
-Rogue Signal includes an official Stratum v1 protocol bridge located at [`cmd/rogue-stratum`](cmd/rogue-stratum). It translates between standard Monero RandomX (`rx/0`) miners (such as **unmodified official XMRig**) and the node's EVM block sealing engine.
-
-### 1. Build the Stratum Bridge
-```bash
-make rogue-stratum
-```
-This produces `./build/bin/rogue-stratum`.
-
-### 2. Start the Node in Remote Sealing Mode
-Launch `core-rogue` with mining enabled and zero local CPU threads (delegating 100% of hashing to Stratum miners):
-```bash
-./build/bin/core-rogue \
-  --datadir /path/to/data \
-  --rogue \
-  --mine \
-  --miner.threads 0 \
-  --miner.etherbase "0xYourPayoutAddress" \
-  --http \
-  --http.port 38845 \
-  --http.api "eth,net,web3,randomx"
-```
-
-### 3. Launch the Stratum Bridge
-```bash
-./build/bin/rogue-stratum \
-  --stratum.host 0.0.0.0 \
-  --stratum.port 3333 \
-  --node.rpc http://127.0.0.1:38845 \
-  --diff 1000
-```
-
-### 4. Connect Official XMRig
-Run official XMRig on any machine:
-```bash
-xmrig -o 127.0.0.1:3333 -u 0xYourPayoutAddress.worker1 -p x -a rx/0
-```
-
-Or configure via `config.json`:
-```json
-{
-  "pools": [
-    {
-      "algo": "rx/0",
-      "url": "127.0.0.1:3333",
-      "user": "0xYourPayoutAddress.worker1",
-      "pass": "x",
-      "keepalive": true
-    }
-  ]
-}
-```
-
----
-
 ## 🌐 JSON-RPC & Web3 Developer Guide
 
 ### Testing with `curl`
@@ -467,15 +406,13 @@ forge create --rpc-url http://127.0.0.1:38845 \
 
 ---
 
-## ⛏️ Mining & Stratum Architecture
+## ⛏️ Egalitarian Home CPU Mining Architecture
 
-Rogue Signal supports two distinct mining modes:
+Rogue Signal is designed strictly for decentralized solo mining on standard home computers (*1 CPU = 1 Vote*):
 
-1. **Integrated Solo Mining**: Managed internally via `core-rogue --mine --miner.threads N` (ideal for private networks, tests, and casual solo miners).
-2. **High-Performance Pool Mining**: Supported via the **`rogue-stratum`** bridge service.
-   - Listens on TCP port `3333` using the RandomX Stratum v1 protocol.
-   - Any off-the-shelf **XMRig** binary connects to `rogue-stratum` targeting algorithm `rx/0`.
-   - `rogue-stratum` fetches block work from `core-rogue` via RPC, distributes jobs to miners, validates shares, and submits blocks via `eth_submitWork`.
+1. **Integrated In-Node CPU Mining Only**: Managed directly via the official **Rogue Desktop Client** (`miner_start` / `miner_stop`) or CLI node flags (`core-rogue --mine --miner.threads N`).
+2. **Remote Mining & Stratum Disabled**: External mining RPC endpoints (`eth_getWork`, `eth_submitWork`, `eth_submitHashrate`) are disabled at the consensus engine level to prevent external Stratum proxies, mining pools, and specialized mining rigs from centralizing network hashrate.
+3. **Default Light Mode (~256 MB RAM)**: Nodes initialize in RandomX Light Mode by default so any home desktop or laptop can validate and mine blocks safely alongside everyday applications, with optional Fast Mode (~2.08 GB RAM) available via `--randomx.fast` or RPC `randomx_setFastMode`.
 
 ---
 

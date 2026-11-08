@@ -6,8 +6,8 @@
 ## 📋 1. Estado y Verificación Inicial del Sistema
 
 Antes de iniciar cualquier proceso, se verificó el estado del entorno:
-- **Procesos activos de red**: **Ninguno**. No hay instancias en ejecución de `geth`, `core-rogue`, `rogue-stratum` ni del cliente de escritorio (`tauri`/`vite`).
-- **Puertos de red**: **Completamente limpios**. Los puertos estándar `38888` (P2P), `38845` (HTTP RPC), `38846` (WS RPC), `3333` (Stratum) y `1420` (Vite) se encuentran libres.
+- **Procesos activos de red**: **Ninguno**. No hay instancias en ejecución de `geth`, `core-rogue` ni del cliente de escritorio (`tauri`/`vite`).
+- **Puertos de red**: **Completamente limpios**. Los puertos estándar `38888` (P2P), `38845` (HTTP RPC), `38846` (WS RPC) y `1420` (Vite) se encuentran libres.
 
 ---
 
@@ -18,7 +18,8 @@ Antes de iniciar cualquier proceso, se verificó el estado del entorno:
 | **Nombre de Red** | `Rogue Signal` | Red principal de pruebas y producción |
 | **Ticker** | `ROGUE` | Moneda nativa con 18 decimales |
 | **Chain ID** | `800055` | Identificador único EVM (EIP-155) |
-| **Algoritmo PoW** | `RandomX` (`rx/0`) | Minería resistente a ASICs por CPU/Memoria |
+| **Algoritmo PoW** | `RandomX` (`rx/0`) | Minería resistente a ASICs/GPUs exclusiva para CPU casera |
+| **Modo de Memoria** | `Light Mode (~256 MB)` | Por defecto siempre; opción `Fast Mode (~2.08 GB)` |
 | **Tiempo de Bloque** | 10 segundos | Frecuencia objetivo de emisión |
 | **Emisión por Bloque** | 8 ROGUE | Halving cada 6,300,000 bloques (~2 años) |
 | **Reparto de Minado** | 95% Minero / 5% Tesorería | 7.6 ROGUE al minero, 0.4 ROGUE a la tesorería |
@@ -30,22 +31,20 @@ Antes de iniciar cualquier proceso, se verificó el estado del entorno:
 | **Puerto P2P por defecto** | `38888` | Protocolo devp2p eth/68 |
 | **Puerto HTTP RPC** | `38845` | API JSON-RPC |
 | **Puerto WS RPC** | `38846` | WebSocket JSON-RPC |
-| **Puerto Stratum v1** | `3333` | Puente para mineros externos (XMRig) |
+| **Minería Remota** | **Deshabilitada** | `eth_getWork` y `eth_submitWork` bloqueados contra rigs/pools |
 
 ---
 
 ## 🛠️ 3. Ubicación y Verificación de Binarios Compilados
 
 El núcleo de la red cuenta con sus ejecutables nativos precompilados en el directorio `rogue-core-chain/build/bin/`:
-- `core-rogue` o `geth`: Nodo completo Core-Geth con motor de consenso RandomX y reglas EVM Cancun.
-- `rogue-stratum`: Servidor puente Stratum v1 TCP para conectar plataformas de minado externas (como XMRig) al nodo.
+- `core-rogue` o `geth`: Nodo completo Core-Geth con motor de consenso RandomX integrado y reglas EVM Cancun.
 
 > [!NOTE]
-> Si en algún momento necesitas recompilar los binarios desde el código fuente:
+> Si en algún momento necesitas recompilar el binario desde el código fuente:
 > ```bash
 > cd /media/carlos/DATA1/DEV/blockchain_pow/rogue-core-chain
-> make geth
-> make rogue-stratum
+> make core-rogue
 > ```
 
 ---
@@ -224,74 +223,11 @@ net.peerCount
 
 ---
 
-## ⛏️ 7. Paso a Paso: Iniciar el Puente Stratum y Minar con XMRig
+## 🖥️ 7. Paso a Paso: Iniciar el Cliente de Escritorio (Rogue Signal Desktop)
 
-Rogue Signal incluye un puente nativo de alto rendimiento (`rogue-stratum`) que traduce las peticiones Stratum v1 de mineros externos (como XMRig) al RPC del nodo Core-Rogue.
+El cliente de escritorio está construido con **Tauri v2**, **Rust**, **React 19**, **TypeScript** y **Tailwind CSS**. Administra automáticamente el nodo local como subproceso supervisado y ofrece control total de minería doméstica por CPU.
 
-```
-[Minero XMRig] --(Stratum TCP :3333)--> [rogue-stratum] --(JSON-RPC :38845)--> [core-rogue]
-```
-
-### Paso 7.1: Iniciar el Puente `rogue-stratum`
-
-En una nueva terminal:
-
-```bash
-cd /media/carlos/DATA1/DEV/blockchain_pow
-
-./rogue-core-chain/build/bin/rogue-stratum \
-  -stratum.port 3333 \
-  -node.rpc http://127.0.0.1:38845 \
-  -diff 1000 \
-  -log.level info
-```
-
-Verás el banner oficial de Rogue Signal Stratum Bridge confirmando que está escuchando en `0.0.0.0:3333` y sincronizado con el nodo en `http://127.0.0.1:38845`.
-
-### Paso 7.2: Conectar un Minero Externo (XMRig)
-
-Si tienes `xmrig` instalado en tu sistema:
-
-```bash
-xmrig \
-  -a rx/0 \
-  -o 127.0.0.1:3333 \
-  -u 0xe9aaE535B7971A9AC8C6af0e4B524D02260D3a03 \
-  -p x \
-  --keepalive
-```
-
-O creando un archivo `config.json` para XMRig:
-```json
-{
-  "autosave": false,
-  "cpu": {
-    "enabled": true,
-    "huge-pages": true,
-    "rx": [0, 1]
-  },
-  "pools": [
-    {
-      "algo": "rx/0",
-      "coin": null,
-      "url": "127.0.0.1:3333",
-      "user": "0xe9aaE535B7971A9AC8C6af0e4B524D02260D3a03",
-      "pass": "x",
-      "rig-id": "rig-01",
-      "keepalive": true,
-      "tls": false
-    }
-  ]
-}
-```
-
----
-
-## 🖥️ 8. Paso a Paso: Iniciar el Cliente de Escritorio (Rogue Signal Desktop)
-
-El cliente de escritorio está construido con **Tauri v2**, **Rust**, **React 19**, **TypeScript** y **Tailwind CSS**. Administra automáticamente el nodo y el puente Stratum como subprocesos locales (Sidecar).
-
-### Paso 8.1: Requisitos de Sistema (Ubuntu/Debian)
+### Paso 7.1: Requisitos de Sistema (Ubuntu/Debian)
 
 Si es la primera vez que se ejecuta en la máquina, asegúrate de tener las dependencias nativas instaladas:
 
@@ -307,7 +243,7 @@ sudo apt update && sudo apt install -y \
   librsvg2-dev
 ```
 
-### Paso 8.2: Ejecución en Modo Desarrollo (Hot-Reload)
+### Paso 7.2: Ejecución en Modo Desarrollo (Hot-Reload)
 
 Para lanzar la aplicación de escritorio en modo desarrollo:
 
@@ -327,7 +263,7 @@ npm run tauri dev
 > ```
 > Y abre en tu navegador: `http://localhost:1420`.
 
-### Paso 8.3: Compilar el Instalador de Producción (`.deb` / `.AppImage`)
+### Paso 7.3: Compilar el Instalador de Producción (`.deb` / `.AppImage`)
 
 Para empaquetar la aplicación de escritorio final lista para distribución:
 
@@ -340,36 +276,36 @@ Los archivos compilados quedarán generados en:
 
 ---
 
-## 🕹️ 9. Flujo de Trabajo en el Cliente de Escritorio
+## 🕹️ 8. Flujo de Trabajo en el Cliente de Escritorio
 
 Una vez abierta la aplicación gráfica:
 
 1. **Creación o Desbloqueo del Vault Criptográfico**:
    - En la primera apertura, genera una frase semilla de 12 palabras (BIP-39).
-   - Define tu contraseña maestra. El backend de Rust derivará una clave de cifrado mediante **Argon2id** (64 MB de memoria, 3 iteraciones) y protegerá tu frase secreta con **AES-256-GCM**.
+   - Define tu contraseña maestra. El backend de Rust derivará una clave de cifrado mediante **Argon2id** y protegerá tu frase secreta con **AES-256-GCM**.
    - Se creará automáticamente tu primera dirección EVM (`m/44'/60'/0'/0/0`).
-2. **Pestaña "Node Manager" (Supervisión del Nodo Local)**:
-   - Haz clic en **Start Node**. Tauri lanzará automáticamente el binario adyacente `rogue-core-chain/build/bin/geth --rogue` como subproceso supervisado.
-   - Podrás ver los logs en tiempo real (`stdout`/`stderr`) de la blockchain fluyendo en la consola integrada.
-   - Puedes configurar si deseas minar directamente con la CPU, seleccionar el número de núcleos e incluso activar el **Fast Mode** con 1 clic.
-3. **Pestaña "Mining" (Gestión de Minería y Stratum)**:
-   - Inicia o detén el puente `rogue-stratum` en el puerto `3333`.
-   - Haz clic en **Export XMRig Config** para descargar instantáneamente un archivo `config.json` con tu dirección de billetera configurada para repartir recompensas.
+2. **Pestaña "Dashboard" y Supervisión Automática del Nodo Local**:
+   - Al abrir el cliente, Tauri inicia automáticamente el binario `rogue-core-chain/build/bin/geth --rogue` como subproceso supervisado en modo `full` sync.
+3. **Pestaña "Minería CPU" (Solo Mining para Computadores Caseros)**:
+   - Haz clic en **Verificar Recursos del Sistema** para inspeccionar cuántos núcleos lógicos y cuánta memoria RAM libre tiene tu computador.
+   - Selecciona un perfil seguro de uso de CPU: **Bajo Impacto (25%)**, **Equilibrado (50%)** o **Máxima Potencia (75%)**, o ajusta manualmente los hilos.
+   - El modo de memoria predeterminado es siempre **Light Mode (~256 MB RAM)** para cuidar tu equipo; opcionalmente puedes alternar a **Fast Mode (~2.08 GB RAM)** si cuentas con más de 3 GB de RAM libre.
+   - Al presionar **Iniciar Minería en Solitario**, el cliente sincroniza automáticamente tu dirección activa de billetera (`miner_setEtherbase`) y activa el minero interno (`miner_start`).
 4. **Pestaña "Wallet" (Transacciones y Saldos)**:
-   - Consulta tu saldo en tiempo real en ROGUE y el historial de transacciones.
-   - Envía transferencias con cálculo automático de comisiones EIP-1559 (Slow, Normal, Fast). Las firmas de transacciones se realizan 100% de manera local y aislada en Rust antes de enviarse al RPC.
-5. **Pestaña "Explorer" (Mini Explorador on-chain)**:
-   - Observa en vivo la altura del bloque, la dificultad actual calculada por LWMA-1, los gas limits y las recompensas del protocolo.
+   - Consulta tu saldo en tiempo real en ROGUE y gestiona múltiples billeteras y categorías de direcciones.
+   - Envía transferencias firmadas 100% de manera local y aislada en Rust.
+5. **Pestaña "Settings" (Configuración y Diagnóstico de Hardware)**:
+   - Incluye también el botón **Verificar Recursos del Sistema** para ajustar el límite de caché RAM y parámetros del nodo sin riesgo.
 
 ---
 
-## ⚠️ 10. Solución de Problemas Frecuentes (Troubleshooting)
+## ⚠️ 9. Solución de Problemas Frecuentes (Troubleshooting)
 
 ### Error: `listen tcp :38888: bind: address already in use`
 - **Causa**: Ya hay una instancia de geth corriendo en segundo plano o el puerto no se liberó.
 - **Solución**:
   ```bash
-  killall -9 geth core-rogue rogue-stratum
+  killall -9 geth core-rogue
   ```
 
 ### Rendimiento bajo en minería o error de memoria RandomX Fast Mode
