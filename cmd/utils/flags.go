@@ -42,6 +42,8 @@ import (
 	"github.com/ethereum/go-ethereum/common/fdlimit"
 	"github.com/ethereum/go-ethereum/consensus/ethash"
 	"github.com/ethereum/go-ethereum/consensus/lyra2"
+	"github.com/ethereum/go-ethereum/consensus/randomx"
+	"github.com/ethereum/go-ethereum/params/types/ctypes"
 
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/rawdb"
@@ -176,6 +178,16 @@ var (
 		Name:     "mintme",
 		Usage:    "MintMe.com Coin mainnet: pre-configured MintMe.com Coin mainnet",
 		Category: flags.EthCategory,
+	}
+	RogueFlag = &cli.BoolFlag{
+		Name:     "rogue",
+		Usage:    "Rogue Signal network: pre-configured RandomX proof-of-work network",
+		Category: flags.EthCategory,
+	}
+	RandomXFastFlag = &cli.BoolFlag{
+		Name:     "randomx.fast",
+		Usage:    "Enable RandomX Fast Mode (~2.08GB RAM dataset for fast mining/validation)",
+		Category: flags.MinerCategory,
 	}
 	MordorFlag = &cli.BoolFlag{
 		Name:     "mordor",
@@ -1131,6 +1143,7 @@ var (
 		MainnetFlag,
 		ClassicFlag,
 		MintMeFlag,
+		RogueFlag,
 	}, TestnetFlags...)
 
 	// DatabaseFlags is the flag group of all database flags.
@@ -1209,6 +1222,8 @@ func setBootstrapNodes(ctx *cli.Context, cfg *p2p.Config) {
 			urls = params.ClassicBootnodes
 		case ctx.Bool(MintMeFlag.Name):
 			urls = params.MintMeBootnodes
+		case ctx.Bool(RogueFlag.Name):
+			urls = params.RogueBootnodes
 		case ctx.Bool(MordorFlag.Name):
 			urls = params.MordorBootnodes
 		case ctx.Bool(SepoliaFlag.Name):
@@ -1248,6 +1263,8 @@ func setBootstrapNodesV5(ctx *cli.Context, cfg *p2p.Config) {
 		urls = params.MordorBootnodes
 	case ctx.Bool(MintMeFlag.Name):
 		urls = params.MintMeBootnodes
+	case ctx.Bool(RogueFlag.Name):
+		urls = params.RogueBootnodes
 	case cfg.BootstrapNodesV5 != nil:
 		return // already set, don't apply defaults.
 	}
@@ -1582,6 +1599,18 @@ func SetNodeConfig(ctx *cli.Context, cfg *node.Config) {
 	SetDataDir(ctx, cfg)
 	setSmartCard(ctx, cfg)
 
+	if ctx.Bool(RogueFlag.Name) {
+		if !ctx.IsSet(ListenPortFlag.Name) {
+			cfg.P2P.ListenAddr = ":38888"
+		}
+		if !ctx.IsSet(HTTPPortFlag.Name) {
+			cfg.HTTPPort = 38845
+		}
+		if !ctx.IsSet(WSPortFlag.Name) {
+			cfg.WSPort = 38846
+		}
+	}
+
 	if ctx.IsSet(JWTSecretFlag.Name) {
 		cfg.JWTSecret = ctx.String(JWTSecretFlag.Name)
 	}
@@ -1693,6 +1722,8 @@ func dataDirPathForCtxChainConfig(ctx *cli.Context, baseDataDirPath string) stri
 		return filepath.Join(baseDataDirPath, "sepolia")
 	case ctx.Bool(MintMeFlag.Name):
 		return filepath.Join(baseDataDirPath, "mintme")
+	case ctx.Bool(RogueFlag.Name):
+		return filepath.Join(baseDataDirPath, "rogue")
 	case ctx.Bool(HoleskyFlag.Name):
 		return filepath.Join(baseDataDirPath, "holesky")
 	}
@@ -1945,9 +1976,13 @@ func CheckExclusive(ctx *cli.Context, args ...interface{}) {
 // SetEthConfig applies eth-related command line flags to the config.
 func SetEthConfig(ctx *cli.Context, stack *node.Node, cfg *ethconfig.Config) {
 	// Avoid conflicting network flags
-	CheckExclusive(ctx, MainnetFlag, DeveloperFlag, DeveloperPoWFlag, SepoliaFlag, ClassicFlag, MordorFlag, MintMeFlag, HoleskyFlag)
+	CheckExclusive(ctx, MainnetFlag, DeveloperFlag, DeveloperPoWFlag, SepoliaFlag, ClassicFlag, MordorFlag, MintMeFlag, HoleskyFlag, RogueFlag)
 	CheckExclusive(ctx, LightServeFlag, SyncModeFlag, "light")
 	CheckExclusive(ctx, DeveloperFlag, DeveloperPoWFlag, ExternalSignerFlag) // Can't use both ephemeral unlocked and external signer
+
+	if ctx.Bool(RandomXFastFlag.Name) {
+		cfg.RandomXFast = true
+	}
 
 	setEtherbase(ctx, cfg)
 	setGPO(ctx, &cfg.GPO)
@@ -2510,6 +2545,8 @@ func genesisForCtxChainConfig(ctx *cli.Context) *genesisT.Genesis {
 		genesis = params.DefaultSepoliaGenesisBlock()
 	case ctx.Bool(MintMeFlag.Name):
 		genesis = params.DefaultMintMeGenesisBlock()
+	case ctx.Bool(RogueFlag.Name):
+		genesis = params.DefaultRogueGenesisBlock()
 	case ctx.Bool(HoleskyFlag.Name):
 		genesis = params.DefaultHoleskyGenesisBlock()
 	case ctx.Bool(DeveloperFlag.Name):
@@ -2547,6 +2584,14 @@ func MakeChain(ctx *cli.Context, stack *node.Node, readonly bool) (*core.BlockCh
 		lyra2Config = &lyra2.Config{}
 	}
 
+	var randomxConfig *randomx.Config
+	if gspec != nil && gspec.Config != nil && gspec.Config.GetConsensusEngineType() == ctypes.ConsensusEngineT_RandomX {
+		randomxConfig = &randomx.Config{
+			FastMode: ctx.Bool(RandomXFastFlag.Name),
+			Threads:  ctx.Int(MinerThreadsFlag.Name),
+		}
+	}
+
 	// Toggle PoW modes at user request.
 	if ctx.Bool(FakePoWFlag.Name) {
 		ethashConfig.PowMode = ethash.ModeFake
@@ -2554,7 +2599,7 @@ func MakeChain(ctx *cli.Context, stack *node.Node, readonly bool) (*core.BlockCh
 		ethashConfig.PowMode = ethash.ModePoissonFake
 	}
 
-	engine := ethconfig.CreateConsensusEngine(stack, &ethashConfig, cliqueConfig, lyra2Config, nil, false, chainDb)
+	engine := ethconfig.CreateConsensusEngine(stack, &ethashConfig, cliqueConfig, lyra2Config, randomxConfig, nil, false, chainDb)
 	if gcmode := ctx.String(GCModeFlag.Name); gcmode != gcModeFull && gcmode != gcModeArchive {
 		Fatalf("--%s must be either 'full' or 'archive'", GCModeFlag.Name)
 	}

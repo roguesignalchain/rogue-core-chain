@@ -1,0 +1,70 @@
+package params
+
+import (
+	"math/big"
+
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/params/types/coregeth"
+	"github.com/ethereum/go-ethereum/params/types/ctypes"
+)
+
+var (
+	// RogueTreasuryAddress is the protocol development treasury address (5% dev fee).
+	RogueTreasuryAddress = common.HexToAddress("0xe9aaE535B7971A9AC8C6af0e4B524D02260D3a03")
+
+	// RogueBootnodes are the official bootstrap discovery nodes for Rogue Signal.
+	RogueBootnodes = []string{}
+
+	// RogueChainConfig is the chain parameters to run a node on the Rogue Signal network.
+	RogueChainConfig = &coregeth.CoreGethChainConfig{
+		NetworkID: 800055,
+		ChainID:   big.NewInt(800055),
+		RandomX: &ctypes.RandomXConfig{
+			FastMode: false,
+			Treasury: RogueTreasuryAddress,
+		},
+
+		// Base protocol rules (Homestead, Tangerine, Spurious Dragon)
+		EIP2FBlock:   big.NewInt(0),
+		EIP7FBlock:   big.NewInt(0),
+		EIP150Block:  big.NewInt(0),
+		EIP155Block:  big.NewInt(0), // Strict replay protection from genesis
+		EIP160FBlock: big.NewInt(0),
+		EIP161FBlock: big.NewInt(0),
+		EIP170FBlock: big.NewInt(0),
+
+		// Byzantium
+		EIP100FBlock: big.NewInt(0),
+		EIP140FBlock: big.NewInt(0),
+		EIP198FBlock: big.NewInt(0),
+		EIP211FBlock: big.NewInt(0),
+		EIP212FBlock: big.NewInt(0),
+		EIP213FBlock: big.NewInt(0),
+		EIP214FBlock: big.NewInt(0),
+		EIP658FBlock: big.NewInt(0),
+
+		// Constantinople & Petersburg
+		EIP145FBlock:  big.NewInt(0),
+		EIP1014FBlock: big.NewInt(0),
+		EIP1052FBlock: big.NewInt(0),
+
+		// Istanbul
+		EIP152FBlock:  big.NewInt(0),
+		EIP1108FBlock: big.NewInt(0),
+		EIP1344FBlock: big.NewInt(0),
+		EIP1884FBlock: big.NewInt(0),
+		EIP2028FBlock: big.NewInt(0),
+		EIP2200FBlock: big.NewInt(0),
+
+		// Shanghai (PUSH0 opcode)
+		EIP3855FBlock: big.NewInt(0),
+
+		// Cancun (MCOPY, TSTORE/TLOAD opcodes)
+		EIP5656FBlock: big.NewInt(0),
+
+		// Defuse difficulty bomb forever (pure PoW RandomX difficulty managed by LWMA-1)
+		DisposalBlock: big.NewInt(0),
+
+		RequireBlockHashes: map[uint64]common.Hash{},
+	}
+)

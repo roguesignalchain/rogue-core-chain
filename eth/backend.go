@@ -31,6 +31,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus/beacon"
 	"github.com/ethereum/go-ethereum/consensus/clique"
 	"github.com/ethereum/go-ethereum/consensus/lyra2"
+	"github.com/ethereum/go-ethereum/consensus/randomx"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/bloombits"
 	"github.com/ethereum/go-ethereum/core/rawdb"
@@ -161,19 +162,25 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		return nil, err
 	}
 
-	var lyra2Config *lyra2.Config
-	if config.Genesis != nil && config.Genesis.Config != nil {
-		if config.Genesis.Config.GetConsensusEngineType() == ctypes.ConsensusEngineT_Lyra2 {
-			lyra2Config = &lyra2.Config{}
-		}
-	}
-
-	engine := ethconfig.CreateConsensusEngine(stack, &ethashConfig, cliqueConfig, lyra2Config, config.Miner.Notify, config.Miner.Noverify, chainDb)
-
 	chainConfig, err := core.LoadChainConfig(chainDb, config.Genesis)
 	if err != nil {
 		return nil, err
 	}
+
+	var lyra2Config *lyra2.Config
+	var randomxConfig *randomx.Config
+	if chainConfig != nil {
+		if chainConfig.GetConsensusEngineType() == ctypes.ConsensusEngineT_Lyra2 {
+			lyra2Config = &lyra2.Config{}
+		} else if chainConfig.GetConsensusEngineType() == ctypes.ConsensusEngineT_RandomX {
+			randomxConfig = &randomx.Config{
+				FastMode: config.RandomXFast,
+				Threads:  1,
+			}
+		}
+	}
+
+	engine := ethconfig.CreateConsensusEngine(stack, &ethashConfig, cliqueConfig, lyra2Config, randomxConfig, config.Miner.Notify, config.Miner.Noverify, chainDb)
 	networkID := config.NetworkId
 	if networkID == 0 {
 		networkID = chainConfig.GetChainID().Uint64()

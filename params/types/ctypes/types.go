@@ -273,6 +273,7 @@ const (
 	ConsensusEngineT_Ethash
 	ConsensusEngineT_Clique
 	ConsensusEngineT_Lyra2
+	ConsensusEngineT_RandomX
 )
 
 func (c ConsensusEngineT) String() string {
@@ -283,6 +284,8 @@ func (c ConsensusEngineT) String() string {
 		return "clique"
 	case ConsensusEngineT_Lyra2:
 		return "lyra2"
+	case ConsensusEngineT_RandomX:
+		return "randomx"
 	default:
 		return "unknown"
 	}
@@ -298,6 +301,10 @@ func (c ConsensusEngineT) IsClique() bool {
 
 func (c ConsensusEngineT) IsLyra2() bool {
 	return c == ConsensusEngineT_Lyra2
+}
+
+func (c ConsensusEngineT) IsRandomX() bool {
+	return c == ConsensusEngineT_RandomX
 }
 
 func (c ConsensusEngineT) IsUnknown() bool {
@@ -387,4 +394,15 @@ type Lyra2Config struct{}
 // String implements the stringer interface, returning the consensus engine details.
 func (c *Lyra2Config) String() string {
 	return "lyra2"
+}
+
+// RandomXConfig is the consensus engine configuration for Rogue Signal network.
+type RandomXConfig struct {
+	FastMode bool           `json:"fastMode,omitempty"`
+	Treasury common.Address `json:"treasury,omitempty"`
+}
+
+// String implements the stringer interface, returning the consensus engine details.
+func (c *RandomXConfig) String() string {
+	return "randomx"
 }

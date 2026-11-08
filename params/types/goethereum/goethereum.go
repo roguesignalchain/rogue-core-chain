@@ -86,10 +86,11 @@ type ChainConfig struct {
 	EWASMBlock *big.Int `json:"ewasmBlock,omitempty"` // EWASM switch block (nil = no fork, 0 = already activated)
 
 	// Various consensus engines
-	Ethash    *ctypes.EthashConfig `json:"ethash,omitempty"`
-	Clique    *ctypes.CliqueConfig `json:"clique,omitempty"`
-	Lyra2     *ctypes.Lyra2Config  `json:"lyra2,omitempty"`
-	IsDevMode bool                 `json:"isDev,omitempty"`
+	Ethash    *ctypes.EthashConfig  `json:"ethash,omitempty"`
+	Clique    *ctypes.CliqueConfig  `json:"clique,omitempty"`
+	Lyra2     *ctypes.Lyra2Config   `json:"lyra2,omitempty"`
+	RandomX   *ctypes.RandomXConfig `json:"randomx,omitempty"`
+	IsDevMode bool                  `json:"isDev,omitempty"`
 
 	// NOTE: These are not included in this type upstream.
 	TrustedCheckpoint       *ctypes.TrustedCheckpoint      `json:"trustedCheckpoint"`
@@ -113,6 +114,7 @@ var networkNames = map[string]string{
 	"3":        "ropsten",
 	"4":        "rinkeby",
 	"11155111": "sepolia",
+	"800055":   "rogue-signal",
 }
 
 // String implements the fmt.Stringer interface.
@@ -138,6 +140,8 @@ func (c *ChainConfig) String() string {
 		} else {
 			banner += "Consensus: Beacon (proof-of-stake), merged from Clique (proof-of-authority)\n"
 		}
+	case c.RandomX != nil:
+		banner += "Consensus: RandomX rx/0 (proof-of-work, ASIC-resistant)\n"
 	default:
 		banner += "Consensus: unknown\n"
 	}
