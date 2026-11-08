@@ -1,245 +1,440 @@
-# Core-Rogue (Rogue Signal)
+# Core-Rogue (Rogue Signal Node)
 
-> Official Go node implementation for **Rogue Signal (ROGUE)** — an ASIC-resistant Proof-of-Work EVM blockchain powered by **RandomX (`rx/0`)**.
-> Based on [etclabscore/core-geth](https://github.com/etclabscore/core-geth).
+> Official Go client and node implementation for **Rogue Signal (ROGUE)** — a high-performance, ASIC-resistant Proof-of-Work EVM blockchain powered by **RandomX (`rx/0`)**.
+> Built downstream from [etclabscore/core-geth](https://github.com/etclabscore/core-geth) to maintain 100% upstream EVM compatibility and long-term protocol upgradability.
 
 ---
 
-## 🚀 Overview & Specifications
+## 📋 Table of Contents
 
-| Parameter | Value | Details |
+- [Overview & Technical Specifications](#-overview--technical-specifications)
+- [Monetary Policy & Halving Schedule](#-monetary-policy--halving-schedule)
+- [Architecture & Internal Modifications](#-architecture--internal-modifications)
+  - [Consensus Package (`consensus/randomx`)](#1-consensus-package-consensusrandomx)
+  - [Parameters & Genesis (`params/`)](#2-parameters--genesis-params)
+  - [Backend & Engine Dispatch (`eth/`)](#3-backend--engine-dispatch-eth)
+  - [CLI Flags & Port Management (`cmd/utils/`)](#4-cli-flags--port-management-cmdutils)
+- [Building from Source (Native, No Docker)](#-building-from-source-native-no-docker)
+  - [Prerequisites](#prerequisites)
+  - [Compilation on Linux](#compilation-on-linux)
+  - [Compilation on macOS](#compilation-on-macos)
+  - [Compilation on Windows](#compilation-on-windows)
+- [Running Unit & Consensus Tests](#-running-unit--consensus-tests)
+- [Node Operations & Useful Commands](#-node-operations--useful-commands)
+  - [1. Initializing the Blockchain](#1-initializing-the-blockchain)
+  - [2. Starting a Full Validator Node](#2-starting-a-full-validator-node)
+  - [3. Running a Local Mining Node](#3-running-a-local-mining-node)
+  - [4. Enabling Fast Mode (~2.08 GB RAM)](#4-enabling-fast-mode-208-gb-ram)
+  - [5. Attaching to JavaScript Console (IPC / RPC)](#5-attaching-to-javascript-console-ipc--rpc)
+  - [6. Useful JavaScript Console Commands](#6-useful-javascript-console-commands)
+- [JSON-RPC & Web3 Developer Guide](#-json-rpc--web3-developer-guide)
+  - [Testing with `curl`](#testing-with-curl)
+  - [Connecting with MetaMask](#connecting-with-metamask)
+  - [Foundry / Hardhat Integration](#foundry--hardhat-integration)
+- [Mining & Stratum Architecture](#-mining--stratum-architecture)
+- [Upstream Synchronization & Git Hygiene](#-upstream-synchronization--git-hygiene)
+
+---
+
+## 🚀 Overview & Technical Specifications
+
+| Parameter | Value | Technical Details |
 | :--- | :--- | :--- |
-| **Network Name** | Rogue Signal | Official network name |
-| **Native Currency** | ROGUE | 18 decimals (`10^18` wei per ROGUE) |
-| **Chain ID** | `800055` | Strict EIP-155 replay protection from block 0 |
-| **Mining Algorithm**| **RandomX (`rx/0`)** | Monero standard profile (100% compatible with XMRig) |
-| **Memory Profile** | **Light Mode (~256 MB RAM) by default** | Low-end PC friendly; optional Fast Mode (~2.08 GB RAM) via `--randomx.fast` |
-| **Block Target Time** | **10 seconds** | High responsiveness for DeFi and smart contracts |
-| **Gas Limit** | **60,000,000** per block | High throughput without choking CPU nodes |
+| **Network Name** | **Rogue Signal** | Canonical network designation |
+| **Native Currency** | **ROGUE** | 18 decimals (`10^18` wei per ROGUE) |
+| **Chain ID** | **`800055`** | Strict EIP-155 replay protection active from block 0 |
+| **Mining Algorithm**| **RandomX (`rx/0`)** | Monero standard profile (100% compatible with official XMRig) |
+| **Default RAM Profile**| **Light Mode (~256 MB RAM)** | Optimized for low-end CPUs and hardware with limited RAM |
+| **Optional RAM Profile**| **Fast Mode (~2.08 GB RAM)** | Activated via `--randomx.fast` for dedicated servers / pools |
+| **Block Target Time** | **10 seconds** | High responsiveness for DeFi, AMMs, and dApps |
+| **Gas Limit** | **60,000,000** per block | High transaction bandwidth without causing state bloat |
 | **Difficulty Algorithm** | **LWMA-1** ($N=60$) | Linear Weighted Moving Average with bootstrap scaling $k=\min(60, H)$ |
-| **Target Clamping** | **$\pm 33\%$ per block** | Clamps adjustment to $[67\%, 133\%]$ to prevent hashrate oscillation attacks |
-| **Genesis Difficulty** | `0x10000` (65,536) | Min difficulty threshold for rapid dev startup and CI tests |
-| **Timestamp Rules** | **Strict MTP-11** | Block time must exceed Past Median Time of last 11 blocks; max 15s future drift |
+| **Target Clamping** | **$\pm 33\%$ per block** | Clamps adjustment to $[67\%, 133\%]$ to prevent hashrate shock attacks |
+| **Genesis Difficulty** | `0x10000` (65,536) | Calibrated initial difficulty for rapid testing and dev launches |
+| **Timestamp Rules** | **Strict MTP-11** | Block time must exceed Past Median Time of past 11 blocks; max 15s future drift |
 | **Total Max Supply** | **100,000,000 ROGUE** | Mathematical hard cap across 32 halving eras (zero tail emission) |
-| **Initial Block Reward**| **8 ROGUE** | Halving every 6,300,000 blocks (~2 years at 10s/block) |
-| **Reward Split** | **95% Miner / 5% Protocol Treasury** | 7.6 ROGUE to miner, 0.4 ROGUE to protocol treasury per block |
-| **Treasury Address** | Configurable in `genesis.json` | Default fallback `0x8000550000000000000000000000000000800055` |
-| **Uncle Blocks** | **Strictly Forbidden (0%)** | Uncles rejected (`ErrUnclesNotAllowed`), simplifying consensus |
-| **Seed Rotation** | Every 2048 blocks (~5.7h) | Seed lag of 64 blocks (~10m) for background cache precomputation |
-| **Cache Retention** | 128 blocks (~20m) | Retains previous epoch cache to validate chain reorgs seamlessly |
-| **SealHash Format** | RLP(Header without Nonce & MixDigest) | Evaluates canonical Ethereum header serialization |
-| **MixDigest** | 32-byte RandomX hash | Direct inclusion proof stored in header |
-| **Default Ports** | P2P: `38888` \| HTTP RPC: `38845` \| WS: `38846` \| Stratum: `3333` | Non-conflicting dedicated ports |
+| **Initial Block Reward**| **8 ROGUE** | Halves every 6,300,000 blocks (~2 years at 10s/block) |
+| **Reward Split** | **95% Miner / 5% Treasury** | 7.6 ROGUE to miner coinbase, 0.4 ROGUE to protocol treasury per block |
+| **Treasury Address** | `0xe9aaE535B7971A9AC8C6af0e4B524D02260D3a03` | Hardcoded default fallback; configurable in `genesis.json` |
+| **Uncle Blocks** | **Strictly Forbidden (0%)** | Uncle headers rejected (`ErrUnclesNotAllowed`), simplifying state tree |
+| **Seed Rotation** | **Every 2048 blocks (~5.7h)** | Rotates RandomX VM key every 2048 blocks |
+| **Seed Lag** | **64 blocks (~10m)** | Next epoch seed is locked 64 blocks early for background precomputation |
+| **Cache Retention** | **128 blocks (~20m)** | Retains previous epoch cache in RAM to validate chain reorganizations |
+| **SealHash Format** | RLP(Header without Nonce & MixDigest) | Canonical Ethereum RLP serialization excluding mutable seal fields |
+| **MixDigest** | 32-byte RandomX hash | Direct PoW inclusion proof stored in header |
+| **Default P2P Port** | **`38888`** | Dedicated port avoiding Ethereum/ETC discovery collisions |
+| **Default HTTP RPC** | **`38845`** | Dedicated JSON-RPC HTTP port |
+| **Default WS RPC** | **`38846`** | Dedicated WebSocket port |
+| **Default Stratum** | **`3333`** | Dedicated Stratum mining port for CPU miners |
+| **EVM Fork Base** | **Cancun / Shanghai** | `PUSH0`, `MCOPY`, `TSTORE/TLOAD` enabled from block 0 (no blob bloat) |
 
 ---
 
-## 🛠️ Building Core-Rogue (Native, No Docker)
+## 💰 Monetary Policy & Halving Schedule
 
-Core-Rogue embeds the C++ RandomX engine via CGO. It compiles into a 100% self-contained static executable.
+Rogue Signal implements a strictly disinflationary emission model inspired by Bitcoin, but optimized for a 10-second block cadence:
+
+$$\text{Era} = \left\lfloor \frac{\text{BlockNumber} - 1}{6,300,000} \right\rfloor$$
+$$\text{Reward} = \left\lfloor \frac{8 \times 10^{18}}{2^{\text{Era}}} \right\rfloor \text{ wei}$$
+
+* **Era 0 (Blocks 1 – 6,300,000 / ~Years 0–2)**: 8 ROGUE per block (7.6 ROGUE miner / 0.4 ROGUE treasury). **50,400,000 ROGUE minted**.
+* **Era 1 (Blocks 6,300,001 – 12,600,000 / ~Years 2–4)**: 4 ROGUE per block (3.8 ROGUE miner / 0.2 ROGUE treasury). **25,200,000 ROGUE minted**.
+* **Era 2 (Blocks 12,600,001 – 18,900,000 / ~Years 4–6)**: 2 ROGUE per block (1.9 ROGUE miner / 0.1 ROGUE treasury). **12,600,000 ROGUE minted**.
+* **Era 3 (Blocks 18,900,001 – 25,200,000 / ~Years 6–8)**: 1 ROGUE per block (0.95 ROGUE miner / 0.05 ROGUE treasury). **6,300,000 ROGUE minted**.
+* **Eras 4 – 31**: Exponential reduction halving every 6.3M blocks.
+* **Era 32+**: **0 ROGUE (Absolute Zero)**. After 100M ROGUE are minted, the block subsidy is permanently terminated. Miners are sustained 100% by transaction gas fees.
+
+---
+
+## 🏗️ Architecture & Internal Modifications
+
+```
+                     Core-Geth Node Architecture
+┌────────────────────────────────────────────────────────────────────────┐
+│                          JSON-RPC / Web3 API                           │
+│           eth_blockNumber, eth_getBalance, eth_sendRawTransaction      │
+└───────────────────────────────────┬────────────────────────────────────┘
+                                    │
+┌───────────────────────────────────▼────────────────────────────────────┐
+│                    Ethereum Execution Layer (core/)                    │
+│      EVM State Processor (Cancun / Shanghai opcodes active at block 0) │
+│                       Pebble Database State Engine                     │
+└───────────────────────────────────┬────────────────────────────────────┘
+                                    │ consensus.Engine
+┌───────────────────────────────────▼────────────────────────────────────┐
+│                   consensus/randomx (Engine Interface)                 │
+│                                                                        │
+│  ├── difficulty.go : LWMA-1 (N=60, clamp +-33%, MTP-11 validation)    │
+│  ├── rewards.go    : 8 ROGUE base, 2-yr halving, 95%/5% split, 100M cap│
+│  ├── epoch.go      : 2048-block epoch manager, 64-block seed lag       │
+│  ├── randomx.go    : SealHash, VerifySeal, built-in multithreaded miner│
+│  └── rx_cgo.go     : CGO bindings to librandomx.a (Light/Fast modes)   │
+└───────────────────────────────────┬────────────────────────────────────┘
+                                    │ CGO Static Linking
+┌───────────────────────────────────▼────────────────────────────────────┐
+│                       librandomx.a (Native C++)                        │
+│          Hardware AES, JIT Compiler, Argon2d, Superscalar CPU          │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+### 1. Consensus Package (`consensus/randomx`)
+- **`rx_cgo.go`**: Provides thread-safe Go bindings to `librandomx.a`.
+  - Implements `RxContext` containing an initialized `randomx_cache` (~256 MB) or `randomx_dataset` (~2.08 GB).
+  - Uses `sync.Pool` to maintain reusable `randomx_vm` virtual machines across worker goroutines, avoiding allocation overhead during verification or mining.
+- **`difficulty.go`**: Implements Zawy's **LWMA-1** algorithm.
+  - Dynamically bootstraps for initial blocks ($H < 60$) using $k = \min(60, H)$.
+  - Applies target clamping limiting difficulty shifts to $[67\%, 133\%]$ per block.
+  - Implements `CalculateMTP11` checking that each block timestamp exceeds the median of the past 11 blocks.
+- **`rewards.go`**: Calculates the halving emission curve and splits rewards between miner coinbase (95%) and protocol treasury (5%).
+- **`epoch.go`**: Coordinates RandomX seed rotation every 2048 blocks.
+  - Sets seed at block $E \times 2048 - 64$.
+  - Precomputes the upcoming epoch cache asynchronously in a background goroutine during the 64-block lag window.
+  - Retains the previous epoch's cache for 128 blocks to allow reorganization validation without CPU freezing.
+- **`randomx.go`**: Full implementation of the `consensus.Engine` interface.
+  - `SealHash`: Calculates canonical Keccak256 hash of header fields, excluding Nonce and MixDigest.
+  - `MiningInput`: Packs 32-byte `SealHash` and 8-byte little-endian `Nonce` into a 40-byte RandomX input blob.
+  - `VerifySeal`: Validates that `HashToBig(RandomX(input)) <= Target` and `header.MixDigest == RandomX(input)`.
+  - `VerifyUncles`: Enforces 0 uncles (rejects blocks with uncles via `ErrUnclesNotAllowed`).
+  - `Seal`: Multithreaded local miner loop for tests and solo mining.
+
+### 2. Parameters & Genesis (`params/`)
+- **`params/types/ctypes/types.go`**:
+  - Added `ConsensusEngineT_RandomX` to `ConsensusEngineT` enum.
+  - Added `RandomXConfig` struct with `FastMode` and `Treasury` fields.
+- **`params/config_rogue.go`**:
+  - Added `RogueChainConfig` setting Chain ID `800055`, Cancun opcodes (`PUSH0`, `MCOPY`, `TSTORE/TLOAD`) from block 0, and default treasury `0xe9aaE535B7971A9AC8C6af0e4B524D02260D3a03`.
+- **`params/genesis_rogue.go`**:
+  - Added `DefaultRogueGenesisBlock()` setting 60M gas limit, `0x10000` difficulty, and empty alloc (0% premine).
+- **`params/types/goethereum/goethereum.go`**:
+  - Registered `"800055": "rogue-signal"` in network names.
+  - Updated chain banner to display: `Consensus: RandomX rx/0 (proof-of-work, ASIC-resistant)`.
+
+### 3. Backend & Engine Dispatch (`eth/`)
+- **`eth/ethconfig/config.go`**:
+  - Added `RandomXFast bool` configuration flag.
+  - Extended `CreateConsensusEngine` to instantiate `randomx.New(*randomxConfig)` when RandomX is specified.
+- **`eth/backend.go`**:
+  - Loads `chainConfig` from database and inspects `chainConfig.GetConsensusEngineType()`.
+  - Automatically dispatches `RandomX` consensus engine without falling back to Ethash or generating DAGs.
+
+### 4. CLI Flags & Port Management (`cmd/utils/`)
+- **`cmd/utils/flags.go`**:
+  - Added `--rogue` flag to load Rogue Signal network configuration.
+  - Added `--randomx.fast` flag to toggle Fast Mode.
+  - Overrides default ports automatically when `--rogue` is passed:
+    - P2P Port: `38888` (default: 30303)
+    - HTTP RPC: `38845` (default: 8545)
+    - WebSocket: `38846` (default: 8546)
+  - Configures data directory to `<datadir>/rogue` by default.
+
+---
+
+## 🛠️ Building from Source (Native, No Docker)
+
+Core-Rogue compiles `librandomx` statically from source and links it directly into the binary.
 
 ### Prerequisites
 
-* **Go**: `1.24+` (or latest stable)
-* **CMake**: `3.15+`
-* **C/C++ Compiler**: GCC/G++ or Clang
+| Tool | Minimum Version | Installation Command (Ubuntu/Debian) | Installation Command (macOS) |
+| :--- | :--- | :--- | :--- |
+| **Go** | 1.24+ | `sudo apt install golang` | `brew install go` |
+| **CMake** | 3.15+ | `sudo apt install cmake` | `brew install cmake` |
+| **C/C++ Compiler** | GCC 9+ / Clang 10+ | `sudo apt install build-essential` | `xcode-select --install` |
 
-### 1. Clone with Submodules
+### Compilation on Linux
 
 ```bash
+# 1. Clone repository with submodules
 git clone --recurse-submodules https://github.com/roguesignalchain/core-rogue.git
 cd core-rogue
-```
 
-If already cloned without submodules:
-```bash
-git submodule update --init --recursive
-```
-
-### 2. Build on Linux (Ubuntu, Debian, Fedora, Arch)
-
-```bash
-# Install dependencies (Ubuntu/Debian)
-sudo apt-get update
-sudo apt-get install -y build-essential cmake
-
-# Compile RandomX static library and core-rogue executable
+# 2. Build the RandomX static library and core-rogue binary
 make core-rogue
 ```
-The executable will be generated at `./build/bin/core-rogue`.
 
-### 3. Build on macOS (Apple Silicon & Intel)
+The resulting standalone executable is generated at:
+```bash
+./build/bin/core-rogue
+```
+
+### Compilation on macOS
 
 ```bash
-# Install dependencies via Homebrew
+# Install toolchain
 brew install go cmake
 
-# Compile
+# Clone and compile
+git clone --recurse-submodules https://github.com/roguesignalchain/core-rogue.git
+cd core-rogue
 make core-rogue
 ```
 
-### 4. Build on Windows (Native with MinGW-w64)
+### Compilation on Windows
 
 1. Install [Go for Windows](https://go.dev/dl/) and [CMake](https://cmake.org/download/).
-2. Install [MinGW-w64](https://www.mingw-w64.org/) (ensure `gcc`, `g++`, and `mingw32-make` are in your `PATH`).
-3. Compile:
+2. Install [MinGW-w64](https://www.mingw-w64.org/) and add `gcc` / `mingw32-make` to your system `PATH`.
+3. In PowerShell or Command Prompt:
 ```cmd
+git clone --recurse-submodules https://github.com/roguesignalchain/core-rogue.git
+cd core-rogue
 mingw32-make core-rogue
 ```
 
 ---
 
-## 🔄 Upstream Synchronization
+## 🧪 Running Unit & Consensus Tests
 
-Core-Rogue maintains compatibility with upstream [etclabscore/core-geth](https://github.com/etclabscore/core-geth) to seamlessly inherit security patches and EVM upgrades.
+To run the complete suite of RandomX unit tests, official vector validations, and integration tests:
 
-Git remotes are structured as follows:
-* `origin` -> `https://github.com/roguesignalchain/core-rogue.git` (this repository)
-* `upstream` -> `https://github.com/etclabscore/core-geth.git` (upstream Core-Geth)
-
-To pull in updates from upstream:
 ```bash
-# Fetch upstream branches
-git fetch upstream master
+# Test all consensus/randomx packages
+cd consensus/randomx
+CGO_ENABLED=1 go test -v .
 
-# Merge or rebase updates
+# Run specific test suites
+CGO_ENABLED=1 go test -v -run TestOfficialRandomXVectorsLightMode  # Official RandomX test vectors
+CGO_ENABLED=1 go test -v -run TestConcurrentHashing               # Thread-safety VM pool test
+CGO_ENABLED=1 go test -v -run TestDifficultyTargetConversion      # Target & difficulty math
+CGO_ENABLED=1 go test -v -run TestLWMAAdjusts                     # LWMA-1 difficulty adjustment
+CGO_ENABLED=1 go test -v -run TestMTP11StrictValidation           # Strict MTP-11 time rules
+CGO_ENABLED=1 go test -v -run TestBlockRewardHalving              # 2-year halving schedule
+CGO_ENABLED=1 go test -v -run TestSplitReward                     # 95% miner / 5% treasury split
+CGO_ENABLED=1 go test -v -run TestMaxSupplyCapCompliance          # 100M hard cap compliance
+CGO_ENABLED=1 go test -v -run TestEpochCalculations               # 2048-block epoch & lag math
+CGO_ENABLED=1 go test -v -run TestSealAndVerifySealIntegration    # End-to-end RandomX block mining & verification
+```
+
+---
+
+## 💻 Node Operations & Useful Commands
+
+### 1. Initializing the Blockchain
+
+Before starting a node for the first time, initialize its database with `genesis.json`:
+
+```bash
+# Initialize custom datadir
+./build/bin/core-rogue --datadir /path/to/data init genesis.json
+```
+
+Output confirmation:
+```
+INFO Wrote genesis block OK config="Chain ID: 800055 (rogue-signal) Consensus: RandomX rx/0 (proof-of-work, ASIC-resistant)"
+INFO Successfully wrote genesis state database=chaindata hash=fbdc74..8a1a27
+```
+
+### 2. Starting a Full Validator Node
+
+Starts a validating node listening on dedicated Rogue Signal ports (**P2P: `38888`**, **RPC: `38845`**, **WS: `38846`**):
+
+```bash
+./build/bin/core-rogue \
+  --datadir /path/to/data \
+  --rogue \
+  --http \
+  --http.addr 127.0.0.1 \
+  --http.port 38845 \
+  --http.api eth,net,web3,personal,txpool \
+  --http.corsdomain "*" \
+  --ws \
+  --ws.addr 127.0.0.1 \
+  --ws.port 38846 \
+  --ws.api eth,net,web3 \
+  --port 38888
+```
+
+### 3. Running a Local Mining Node
+
+To mine blocks using the internal CPU miner:
+
+```bash
+./build/bin/core-rogue \
+  --datadir /path/to/data \
+  --rogue \
+  --mine \
+  --miner.etherbase 0xe9aaE535B7971A9AC8C6af0e4B524D02260D3a03 \
+  --miner.threads 2 \
+  --http \
+  --http.port 38845
+```
+
+### 4. Enabling Fast Mode (~2.08 GB RAM)
+
+By default, Core-Rogue operates in **Light Mode (~256 MB RAM)** so it can run smoothly on low-resource machines. On dedicated servers, pools, or high-end nodes with $\ge 4\text{ GB}$ of RAM, enable **Fast Mode** for instant hash verification:
+
+```bash
+./build/bin/core-rogue \
+  --datadir /path/to/data \
+  --rogue \
+  --randomx.fast \
+  --mine \
+  --miner.etherbase <YOUR_WALLET_ADDRESS>
+```
+
+### 5. Attaching to JavaScript Console (IPC / RPC)
+
+Attach to an actively running node:
+
+```bash
+# Attach via local IPC socket
+./build/bin/core-rogue attach /path/to/data/geth.ipc
+
+# Or attach via HTTP RPC
+./build/bin/core-rogue attach http://127.0.0.1:38845
+```
+
+### 6. Useful JavaScript Console Commands
+
+Once connected to the console:
+
+```javascript
+// Check current block number
+eth.blockNumber
+
+// Check latest block details
+eth.getBlock("latest")
+
+// Check account balance in ROGUE
+web3.fromWei(eth.getBalance("0xe9aaE535B7971A9AC8C6af0e4B524D02260D3a03"), "ether")
+
+// Check mining status and hashrate
+eth.mining
+eth.hashrate
+
+// Start / stop miner with N threads
+miner.start(2)
+miner.stop()
+
+// Check connected P2P peers
+net.peerCount
+admin.peers
+
+// Check transaction pool status
+txpool.status
+```
+
+---
+
+## 🌐 JSON-RPC & Web3 Developer Guide
+
+### Testing with `curl`
+
+#### Check Chain ID (Returns `0xc3517` = 800055):
+```bash
+curl -X POST http://127.0.0.1:38845 \
+  -H "Content-Type: application/json" \
+  --data '{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}'
+```
+
+#### Get Latest Block Number:
+```bash
+curl -X POST http://127.0.0.1:38845 \
+  -H "Content-Type: application/json" \
+  --data '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}'
+```
+
+#### Check Treasury Balance:
+```bash
+curl -X POST http://127.0.0.1:38845 \
+  -H "Content-Type: application/json" \
+  --data '{"jsonrpc":"2.0","method":"eth_getBalance","params":["0xe9aaE535B7971A9AC8C6af0e4B524D02260D3a03","latest"],"id":1}'
+```
+
+### Connecting with MetaMask
+
+You can add Rogue Signal directly to MetaMask or any EVM-compatible wallet:
+
+* **Network Name**: `Rogue Signal`
+* **New RPC URL**: `http://127.0.0.1:38845` (or your public node IP)
+* **Chain ID**: `800055`
+* **Currency Symbol**: `ROGUE`
+* **Block Explorer URL**: *(configured upon explorer deployment)*
+
+### Foundry / Hardhat Integration
+
+Because Rogue Signal implements standard Cancun opcodes, tools like **Foundry** work out of the box:
+
+```bash
+# Deploy a contract using Foundry
+forge create --rpc-url http://127.0.0.1:38845 \
+  --private-key <YOUR_PRIVATE_KEY> \
+  src/MyToken.sol:MyToken
+```
+
+---
+
+## ⛏️ Mining & Stratum Architecture
+
+Rogue Signal supports two distinct mining modes:
+
+1. **Integrated Solo Mining**: Managed internally via `core-rogue --mine --miner.threads N` (ideal for private networks, tests, and casual solo miners).
+2. **High-Performance Pool Mining**: Supported via the **`rogue-stratum`** bridge service.
+   - Listens on TCP port `3333` using the RandomX Stratum v1 protocol.
+   - Any off-the-shelf **XMRig** binary connects to `rogue-stratum` targeting algorithm `rx/0`.
+   - `rogue-stratum` fetches block work from `core-rogue` via RPC, distributes jobs to miners, validates shares, and submits blocks via `eth_submitWork`.
+
+---
+
+## 🔄 Upstream Synchronization & Git Hygiene
+
+Core-Rogue follows strict upstream tracking with Core-Geth:
+
+* **`origin`**: `https://github.com/roguesignalchain/core-rogue.git` (Project repository).
+* **`upstream`**: `https://github.com/etclabscore/core-geth.git` (Base repository).
+
+### Pulling Upstream Updates:
+```bash
+git fetch upstream master
 git merge upstream/master
 ```
 
-To update the RandomX submodule to the latest upstream release:
+### Updating RandomX Submodule:
 ```bash
 git submodule update --remote --recursive
 ```
 
----
-
-## ⛏️ Mining Architecture
-
-Mining on Rogue Signal is decoupled from the node process for maximum efficiency:
-* **Mining Algorithm**: RandomX `rx/0` (standard Monero profile).
-* **Software**: Standard CPU miners (e.g. **XMRig**).
-* **Stratum Bridge**: Nodes expose RPC; a dedicated bridge service (`rogue-stratum`) connects XMRig miners to `core-rogue` via JSON-RPC.
-
----
-
-# CoreGeth
-
-> A Go client for Ethereum Classic, based on [go-ethereum](https://github.com/ethereum/go-ethereum).
-
-[![OpenRPC](https://img.shields.io/static/v1.svg?label=OpenRPC&message=1.14.0&color=blue)](#openrpc-discovery)
-[![Go Reference](https://pkg.go.dev/badge/github.com/etclabscore/core-geth.svg)](https://pkg.go.dev/github.com/etclabscore/core-geth)
-[![Go Report Card](https://goreportcard.com/badge/github.com/etclabscore/core-geth)](https://goreportcard.com/report/github.com/etclabscore/core-geth)
-[![Tests](https://github.com/etclabscore/core-geth/actions/workflows/test-linux.yml/badge.svg?branch=master)](https://github.com/etclabscore/core-geth/actions/workflows/test-linux.yml)
-[![Latest release](https://img.shields.io/github/v/release/etclabscore/core-geth)](https://github.com/etclabscore/core-geth/releases/latest)
-[![Release date](https://img.shields.io/github/release-date/etclabscore/core-geth)](https://github.com/etclabscore/core-geth/releases/latest)
-[![Last commit](https://img.shields.io/github/last-commit/etclabscore/core-geth)](https://github.com/etclabscore/core-geth/commits/master)
-
-CoreGeth runs Ethereum Classic mainnet, the Mordor testnet and private proof-of-work chains. It keeps the proof-of-work consensus and mining that Ethereum Classic runs on, which upstream go-ethereum removed after Ethereum moved to proof of stake.
-
-It stays as close to upstream go-ethereum as Ethereum Classic allows. RPC, JS and CLI APIs, data storage locations and schemas, and node protocols are kept compatible with upstream, so tooling written for geth works with CoreGeth. Bug reports, fixes and proposals that apply to upstream code belong upstream. [Relationship with upstream go-ethereum](#relationship-with-upstream-go-ethereum) describes how changes are merged.
-
-## Maintenance
-
-CoreGeth is maintained in this repository and has been released from it since March 2020. It has implemented every Ethereum Classic upgrade from Phoenix (2020) to Spiral (2024) as specified through the [ECIP process](https://ecips.ethereumclassic.org). It is the client most of the network runs today, as [etcnodes.org](https://etcnodes.org) shows. The badges above show the latest release and the most recent commit.
-
-If development ever moves to another repository, this README will say so.
-
-## Getting a release
-
-CoreGeth releases are published only on this repository's [releases page](https://github.com/etclabscore/core-geth/releases), with container images at [etclabscore/core-geth](https://hub.docker.com/r/etclabscore/core-geth) on Docker Hub. To check that a binary is a CoreGeth release:
-
-- It comes from `github.com/etclabscore/core-geth/releases` or the `etclabscore/core-geth` Docker Hub image, and nowhere else.
-- Its version is in the `v1.12.x` line. Version numbers are assigned by this project and say nothing about where a binary came from, since anyone can tag a fork with a higher number.
-- Every archive comes with a `.sha256` file built by this repository's release workflow. Container images have no such file; they are identified by their tag on the `etclabscore` Docker Hub account, and each tag matches a release on the releases page.
-- The project's only website is the documentation at [etclabscore.github.io/core-geth](https://etclabscore.github.io/core-geth). Any other domain using the CoreGeth name is unrelated to this project.
-
-## Quickstart
-
-Run an Ethereum Classic node with Docker:
-
-```shell
-docker run -d --name coregeth \
-  -v coregeth:/root \
-  -p 30303:30303 -p 30303:30303/udp \
-  -p 127.0.0.1:8545:8545 \
-  etclabscore/core-geth:latest \
-  --classic --http --http.addr 0.0.0.0
-```
-
-For production, pin a release tag such as `v1.12.23` instead of `latest`. Chain data is kept in the `coregeth` volume. Port 30303 is for peers. The JSON-RPC API on port 8545 is published to localhost only, because `--http.addr 0.0.0.0` applies inside the container.
-
-Follow the logs and check sync progress:
-
-```shell
-docker logs -f coregeth
-curl -s -H 'Content-Type: application/json' \
-  --data '{"jsonrpc":"2.0","method":"eth_syncing","params":[],"id":1}' \
-  http://127.0.0.1:8545
-```
-
-For binaries, other networks and the full set of flags, see the [installation guide](https://etclabscore.github.io/core-geth/getting-started/installation).
-
-## Networks
-
-Networks selectable with a flag in the `geth` program built from this repository.
-
-| Network                     | Flag        | Consensus     | Status                                                  |
-| ---                         | ---         | ---           | ---                                                     |
-| Ethereum Classic (ETC)      | `--classic` | PoW (etchash) | supported                                               |
-| Mordor (ETC testnet)        | `--mordor`  | PoW (etchash) | supported                                               |
-| MintMe.com Coin (MINTME)    | `--mintme`  | PoW           | supported                                               |
-| Private chains              | genesis file | PoW / PoA    | supported                                               |
-| Ephemeral development chain | `--dev`     | PoA           | supported                                               |
-
-## Documentation
-
-The [CoreGeth documentation](https://etclabscore.github.io/core-geth) covers [installation](https://etclabscore.github.io/core-geth/getting-started/installation), the [command line](https://etclabscore.github.io/core-geth/getting-started/run-cli), the [JSON-RPC API](https://etclabscore.github.io/core-geth/JSON-RPC-API), [building from source](https://etclabscore.github.io/core-geth/developers/build-from-source) and [running a private network](https://etclabscore.github.io/core-geth/tutorials/private-network), and the [go-ethereum documentation](https://geth.ethereum.org/docs/) applies to everything CoreGeth shares with upstream.
-
-## Relationship with upstream go-ethereum
-
-CoreGeth is based on go-ethereum v1.13.14 (February 2024). Since then upstream has removed the code Ethereum Classic still depends on, in particular proof-of-work consensus, mining and the block propagation that goes with them, so merging whole upstream releases is no longer possible. Changes are backported individually instead.
-
-The rules that decide what gets merged:
-
-- If upstream has code for it, CoreGeth uses upstream's code, including where upstream fixed a problem differently. A backport is kept as close to the upstream commit as this codebase allows and comes with a test that exercises it here, since upstream only tested its own tree.
-- CoreGeth does not diverge from upstream unless Ethereum Classic requires it.
-- The ETC-specific surface (proof-of-work consensus, mining, block propagation, chain configurations) has no upstream to defer to, so changes there need a written rationale and a test that fails without them.
-- Consensus rules follow the [ECIP process](https://ecips.ethereumclassic.org). CoreGeth implements accepted ECIPs.
-- Bugs in code shared with upstream are reported and fixed upstream first.
-
-## Security
-
-Please do not report vulnerabilities in public issues. Use GitHub's private [vulnerability report](https://github.com/etclabscore/core-geth/security/advisories/new) for this repository; see [SECURITY.md](./SECURITY.md) for details. Fixed vulnerabilities are listed in the notes of the release that fixes them.
-
-## Contribution
-
-Thank you for considering to help out with the source code! We welcome contributions from anyone on the internet, and are grateful for even the smallest of fixes!
-
-If you'd like to contribute to CoreGeth, please fork, fix, commit and send a pull request for the maintainers to review and merge into the main code base. If you wish to submit more complex changes though, please [open an issue](https://github.com/etclabscore/core-geth/issues) first, or ask in the [Ethereum Classic Discord](https://ethereumclassic.org/discord), to ensure those changes are in line with the general philosophy of the project and/or get some early feedback which can make both your efforts much lighter as well as our review and merge procedures quick and simple.
-
-Please make sure your contributions adhere to our coding guidelines:
-
- * Code must adhere to the official Go [formatting](https://golang.org/doc/effective_go.html#formatting) guidelines (i.e. uses [gofmt](https://golang.org/cmd/gofmt/)).
- * Code must be documented adhering to the official Go [commentary](https://golang.org/doc/effective_go.html#commentary) guidelines.
- * Pull requests need to be based on and opened against the `master` branch.
- * Commit messages should be prefixed with the package(s) they modify.
-   * E.g. "eth, rpc: make trace configs optional"
-
-Please see the upstream [Developers' Guide](https://geth.ethereum.org/docs/developers/geth-developer/dev-guide) for more details on configuring your environment, managing project dependencies, and testing procedures.
-
-## Forks and other clients
-
-Please be cautious about using other repositories that carry the CoreGeth name. They are not maintained or reviewed by this project, and a release published there is not a CoreGeth release. Forks are welcome. We ask that they use a different name so operators can tell which client they are running.
-
-CoreGeth is one of several Ethereum Classic clients. Others include:
-
-- [getc](https://github.com/go-ethereum-classic/go-ethereum-classic), a Go client based on a newer go-ethereum.
-- [Nethermind](https://github.com/NethermindEth/nethermind) with the [ETC plugin](https://github.com/nethermindEtc/nethermind-etc-plugin), a .NET client.
-- [Besu](https://github.com/besu-eth/besu) with the [ETC plugin](https://github.com/besu-etc/besu-etc-plugin), a Java client.
-
-Which one to run is the operator's choice. Running more than one client makes the network safer.
-
-## License
-
-The CoreGeth library (i.e. all code outside of the `cmd` directory) is licensed under the [GNU Lesser General Public License v3.0](https://www.gnu.org/licenses/lgpl-3.0.en.html), also included in our repository in the `COPYING.LESSER` file.
-
-The CoreGeth binaries (i.e. all code inside of the `cmd` directory) is licensed under the [GNU General Public License v3.0](https://www.gnu.org/licenses/gpl-3.0.en.html), also included in our repository in the `COPYING` file.
+### Git Commit Conventions:
+All contributions must adhere to standard project conventions:
+- **Format**: Conventional Commits (`feat(...)`, `fix(...)`, `build(...)`, `docs(...)`).
+- **Author**: Single author `cjbaezilla <carlos.baeza@gmail.com>`. No co-authorship tags.
+- **Hygiene**: Never commit build artifacts (`build/`, `*.a`, binaries).
