@@ -20,7 +20,7 @@ func DefaultRogueGenesisBlock() *genesisT.Genesis {
 		ExtraData:  []byte("Rogue Signal Genesis 2026"),
 		GasLimit:   60000000,
 		Difficulty: hexutil.MustDecodeBig("0x10000"), // Starting test difficulty (65,536)
-		Timestamp:  1772928000,                       // Fixed launch epoch (Sunday, March 8, 2026)
+		Timestamp:  1772992768,                       // Fixed launch epoch (Sunday, March 8, 2026, 0x69adb900)
 		Alloc:      make(genesisT.GenesisAlloc),      // 0% Premine - 100% Fair Launch
 	}
 }
