@@ -150,12 +150,10 @@ func (miner *Miner) update() {
 				// both events indicate that the local node should be treated as fully synced
 				// and thus ready to mine.
 				canStart = true
+				miner.worker.syncing.Store(false)
 				if shouldStart {
 					miner.worker.start()
 				}
-				miner.worker.syncing.Store(false)
-				// Stop reacting to downloader events
-				events.Unsubscribe()
 			}
 		case <-miner.startCh:
 			if canStart {

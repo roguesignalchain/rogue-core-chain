@@ -405,9 +405,8 @@ func (rx *RandomX) Seal(chain consensus.ChainHeaderReader, block *types.Block, r
 	threads := rx.threads
 	rx.lock.RUnlock()
 
-	// If local CPU mining is disabled (e.g. delegated entirely to Stratum / XMRig), wait for completion
+	// If local CPU mining is disabled (e.g. delegated entirely to Stratum / XMRig), return immediately
 	if threads <= 0 {
-		<-stop
 		return nil
 	}
 
@@ -426,79 +425,83 @@ func (rx *RandomX) Seal(chain consensus.ChainHeaderReader, block *types.Block, r
 		abortOnce  sync.Once
 	)
 
-	var wg sync.WaitGroup
-	for threadID := 0; threadID < threads; threadID++ {
-		wg.Add(1)
-		go func(tid int) {
-			defer wg.Done()
+	// Mining must run asynchronously to prevent blocking the worker's taskLoop,
+	// allowing task cancellation upon receiving new tasks or chain heads.
+	go func() {
+		var wg sync.WaitGroup
+		for threadID := 0; threadID < threads; threadID++ {
+			wg.Add(1)
+			go func(tid int) {
+				defer wg.Done()
 
-			// Each thread starts searching from an independent randomized nonce offset
-			nonce := rand.Uint64() + uint64(tid)*0x100000000
-			var attempts int64
+				// Each thread starts searching from an independent randomized nonce offset
+				nonce := rand.Uint64() + uint64(tid)*0x100000000
+				var attempts int64
 
-			for {
-				select {
-				case <-stop:
-					rx.markAttempts(attempts)
-					return
-				case <-found:
-					rx.markAttempts(attempts)
-					return
-				default:
+				for {
+					select {
+					case <-stop:
+						rx.markAttempts(attempts)
+						return
+					case <-found:
+						rx.markAttempts(attempts)
+						return
+					default:
+					}
+
+					attempts++
+					if (attempts % 16) == 0 {
+						rx.markAttempts(attempts)
+						attempts = 0
+					}
+
+					input := MiningInput(sealHash, nonce)
+					rxHash, err := ctx.CalculateHash(input)
+					if err != nil {
+						rx.markAttempts(attempts)
+						return
+					}
+
+					hashNum := HashToBig(rxHash)
+					if hashNum.Cmp(target) <= 0 {
+						rx.markAttempts(attempts)
+						abortOnce.Do(func() {
+							foundNonce = nonce
+							foundHash = rxHash
+							close(found)
+						})
+						return
+					}
+
+					nonce++
 				}
-
-				attempts++
-				if (attempts % 16) == 0 {
-					rx.markAttempts(attempts)
-					attempts = 0
-				}
-
-				input := MiningInput(sealHash, nonce)
-				rxHash, err := ctx.CalculateHash(input)
-				if err != nil {
-					rx.markAttempts(attempts)
-					return
-				}
-
-				hashNum := HashToBig(rxHash)
-				if hashNum.Cmp(target) <= 0 {
-					rx.markAttempts(attempts)
-					abortOnce.Do(func() {
-						foundNonce = nonce
-						foundHash = rxHash
-						close(found)
-					})
-					return
-				}
-
-				nonce++
-			}
-		}(threadID)
-	}
-
-	select {
-	case <-stop:
-		wg.Wait()
-		return nil
-	case <-found:
-		wg.Wait()
-		// Assemble winning header
-		header.Nonce = types.EncodeNonce(foundNonce)
-		header.MixDigest = common.BytesToHash(foundHash[:])
-
-		log.Info("Successfully sealed block with RandomX",
-			"number", header.Number,
-			"difficulty", header.Difficulty,
-			"nonce", foundNonce,
-			"hash", header.MixDigest.Hex(),
-		)
+			}(threadID)
+		}
 
 		select {
-		case results <- block.WithSeal(header):
 		case <-stop:
+			wg.Wait()
+		case <-found:
+			wg.Wait()
+			// Assemble winning header
+			header.Nonce = types.EncodeNonce(foundNonce)
+			header.MixDigest = common.BytesToHash(foundHash[:])
+
+			log.Info("Successfully sealed block with RandomX",
+				"number", header.Number,
+				"difficulty", header.Difficulty,
+				"nonce", foundNonce,
+				"hash", header.MixDigest.Hex(),
+			)
+
+			select {
+			case results <- block.WithSeal(header):
+			case <-stop:
+			}
 		}
-		return nil
-	}
+	}()
+
+	return nil
 }
 
 func (rx *RandomX) markAttempts(attempts int64) {
