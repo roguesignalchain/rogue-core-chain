@@ -90,7 +90,6 @@ type RandomX struct {
 	treasury common.Address
 
 	epochs *EpochManager
-	remote *remoteSealer
 
 	tracker  hashrateTracker
 	hashrate metrics.Meter
@@ -114,15 +113,13 @@ func New(cfg Config) *RandomX {
 		treasury = DefaultTreasuryAddress
 	}
 
-	rx := &RandomX{
+	return &RandomX{
 		fastMode: cfg.FastMode,
 		threads:  cfg.Threads,
 		treasury: treasury,
 		epochs:   NewEpochManager(cfg.FastMode),
 		hashrate: metrics.NewMeter(),
 	}
-	rx.remote = startRemoteSealer(rx, cfg.NotifyURLs, cfg.NoVerify)
-	return rx
 }
 
 // SetThreads updates the number of mining threads dynamically (-1 to disable local mining).
@@ -391,21 +388,16 @@ func (rx *RandomX) VerifySeal(chain consensus.ChainHeaderReader, header *types.H
 	return nil
 }
 
-// Seal implements the consensus.Engine interface, coordinating local CPU miner threads and remote Stratum miners.
+// Seal implements the consensus.Engine interface, coordinating internal node CPU miner threads.
 func (rx *RandomX) Seal(chain consensus.ChainHeaderReader, block *types.Block, results chan<- *types.Block, stop <-chan struct{}) error {
 	header := block.Header()
 	number := header.Number.Uint64()
-
-	// Push new work to remote sealer for Stratum / RPC external miners
-	if rx.remote != nil {
-		rx.remote.workCh <- &sealTask{block: block, results: results, chain: chain}
-	}
 
 	rx.lock.RLock()
 	threads := rx.threads
 	rx.lock.RUnlock()
 
-	// If local CPU mining is disabled (e.g. delegated entirely to Stratum / XMRig), return immediately
+	// If local CPU mining is disabled, return immediately
 	if threads <= 0 {
 		return nil
 	}
@@ -517,7 +509,7 @@ func (rx *RandomX) CalcDifficulty(chain consensus.ChainHeaderReader, time uint64
 	return CalculateDifficulty(chain, time, parent)
 }
 
-// Hashrate implements consensus.PoW, returning the current mining hashrate of local and remote miners.
+// Hashrate implements consensus.PoW, returning the current mining hashrate of the internal CPU miner.
 func (rx *RandomX) Hashrate() float64 {
 	localRate := rx.tracker.Rate()
 	if localRate == 0 {
@@ -527,20 +519,7 @@ func (rx *RandomX) Hashrate() float64 {
 			localRate = ms.RateMean()
 		}
 	}
-
-	if rx.remote == nil {
-		return localRate
-	}
-
-	var res = make(chan uint64, 1)
-	select {
-	case rx.remote.fetchRateCh <- res:
-		return localRate + float64(<-res)
-	case <-rx.remote.exitCh:
-		return localRate
-	default:
-		return localRate
-	}
+	return localRate
 }
 
 // APIs returns consensus RPC APIs for eth and randomx namespaces.
@@ -557,11 +536,8 @@ func (rx *RandomX) APIs(chain consensus.ChainHeaderReader) []rpc.API {
 	}
 }
 
-// Close releases all RandomX caches, remote sealer, and memory.
+// Close releases all RandomX caches and memory.
 func (rx *RandomX) Close() error {
-	if rx.remote != nil {
-		rx.remote.close()
-	}
 	rx.epochs.Close()
 	return nil
 }

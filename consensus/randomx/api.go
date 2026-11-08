@@ -9,7 +9,9 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 )
 
-var errRandomXStopped = errors.New("randomx engine stopped")
+// ErrRemoteMiningDisabled is returned when external/remote miners attempt to request or submit PoW work.
+// Rogue Signal restricts mining strictly to the internal node CPU engine to prevent external Stratum proxies and specialized rigs.
+var ErrRemoteMiningDisabled = errors.New("remote mining (eth_getWork / eth_submitWork) is disabled on Rogue Signal: only internal node CPU mining is supported")
 
 // API exposes RandomX consensus methods for the RPC interface (eth and randomx namespaces).
 type API struct {
@@ -17,77 +19,22 @@ type API struct {
 	chain consensus.ChainHeaderReader
 }
 
-// GetWork returns a work package for external/remote miners.
-//
-// The work package consists of 4 strings:
-//
-//	result[0] - 32-byte hex SealHash (current block header PoW hash)
-//	result[1] - 32-byte hex SeedHash (RandomX epoch seed hash)
-//	result[2] - 32-byte hex Target boundary condition (2^256 / difficulty)
-//	result[3] - Hex encoded block height
+// GetWork is disabled on Rogue Signal to prevent external Stratum bridges and mining rigs.
 func (api *API) GetWork() ([4]string, error) {
-	if api.rx.remote == nil {
-		return [4]string{}, errors.New("remote mining not enabled")
-	}
-
-	workCh := make(chan [4]string, 1)
-	errc := make(chan error, 1)
-
-	select {
-	case api.rx.remote.fetchWorkCh <- &sealWork{errc: errc, res: workCh}:
-	case <-api.rx.remote.exitCh:
-		return [4]string{}, errRandomXStopped
-	}
-
-	select {
-	case work := <-workCh:
-		return work, nil
-	case err := <-errc:
-		return [4]string{}, err
-	}
+	return [4]string{}, ErrRemoteMiningDisabled
 }
 
-// SubmitWork can be used by external miners to submit their RandomX PoW solution.
-// Nonce is the 8-byte nonce, hash is the SealHash, and digest is the RandomX hash output.
+// SubmitWork is disabled on Rogue Signal to prevent external Stratum bridges and mining rigs.
 func (api *API) SubmitWork(nonce types.BlockNonce, hash, digest common.Hash) bool {
-	if api.rx.remote == nil {
-		return false
-	}
-
-	errc := make(chan error, 1)
-	select {
-	case api.rx.remote.submitWorkCh <- &mineResult{
-		nonce:     nonce,
-		mixDigest: digest,
-		hash:      hash,
-		errc:      errc,
-	}:
-	case <-api.rx.remote.exitCh:
-		return false
-	}
-
-	err := <-errc
-	return err == nil
+	return false
 }
 
-// SubmitHashrate records hashrate reported by remote miners.
+// SubmitHashrate is disabled on Rogue Signal as external miners are not supported.
 func (api *API) SubmitHashrate(rate hexutil.Uint64, id common.Hash) bool {
-	if api.rx.remote == nil {
-		return false
-	}
-
-	done := make(chan struct{}, 1)
-	select {
-	case api.rx.remote.submitRateCh <- &hashrate{done: done, rate: uint64(rate), id: id}:
-	case <-api.rx.remote.exitCh:
-		return false
-	}
-
-	<-done
-	return true
+	return false
 }
 
-// GetHashrate returns total combined hashrate of local and remote miners.
+// GetHashrate returns the current hashrate of the internal local CPU miner.
 func (api *API) GetHashrate() uint64 {
 	return uint64(api.rx.Hashrate())
 }

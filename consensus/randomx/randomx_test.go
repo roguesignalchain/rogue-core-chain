@@ -228,3 +228,28 @@ func TestFinalizeAndAssembleWithTransactions(t *testing.T) {
 		t.Errorf("TxHash must not be empty when transactions are present")
 	}
 }
+
+func TestRemoteMiningDisabled(t *testing.T) {
+	chain := NewFakeChainReader()
+	rx := New(Config{FastMode: false, Threads: 1})
+	defer rx.Close()
+
+	apis := rx.APIs(chain)
+	if len(apis) == 0 {
+		t.Fatal("Expected non-empty APIs")
+	}
+
+	api := apis[0].Service.(*API)
+
+	if _, err := api.GetWork(); err != ErrRemoteMiningDisabled {
+		t.Errorf("Expected ErrRemoteMiningDisabled from GetWork, got %v", err)
+	}
+
+	if api.SubmitWork(types.EncodeNonce(1), common.Hash{}, common.Hash{}) {
+		t.Error("Expected SubmitWork to return false when remote mining is disabled")
+	}
+
+	if api.SubmitHashrate(1000, common.Hash{}) {
+		t.Error("Expected SubmitHashrate to return false when remote mining is disabled")
+	}
+}
