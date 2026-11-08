@@ -8,6 +8,7 @@ import (
 	"math/big"
 	"math/rand"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -32,6 +33,55 @@ var (
 	ErrUnclesNotAllowed = errors.New("uncles not allowed on Rogue Signal")
 )
 
+type hashrateTracker struct {
+	mu          sync.Mutex
+	lastTick    time.Time
+	lastHashes  int64
+	currentRate float64
+	totalHashes atomic.Int64
+}
+
+func (ht *hashrateTracker) Mark(attempts int64) {
+	if attempts <= 0 {
+		return
+	}
+	ht.totalHashes.Add(attempts)
+}
+
+func (ht *hashrateTracker) Rate() float64 {
+	ht.mu.Lock()
+	defer ht.mu.Unlock()
+
+	now := time.Now()
+	if ht.lastTick.IsZero() {
+		ht.lastTick = now
+		ht.lastHashes = ht.totalHashes.Load()
+		return ht.currentRate
+	}
+
+	elapsed := now.Sub(ht.lastTick).Seconds()
+	if elapsed >= 1.0 {
+		currHashes := ht.totalHashes.Load()
+		delta := currHashes - ht.lastHashes
+		if delta > 0 {
+			instant := float64(delta) / elapsed
+			if ht.currentRate == 0 {
+				ht.currentRate = instant
+			} else {
+				ht.currentRate = 0.7*instant + 0.3*ht.currentRate
+			}
+		} else if elapsed > 4.0 {
+			ht.currentRate = 0
+		}
+		ht.lastHashes = currHashes
+		ht.lastTick = now
+	} else if now.Sub(ht.lastTick).Seconds() > 4.0 {
+		ht.currentRate = 0
+	}
+
+	return ht.currentRate
+}
+
 // RandomX implements the consensus.Engine and consensus.PoW interfaces for Rogue Signal using RandomX (rx/0).
 type RandomX struct {
 	fastMode bool
@@ -41,6 +91,7 @@ type RandomX struct {
 	epochs *EpochManager
 	remote *remoteSealer
 
+	tracker  hashrateTracker
 	hashrate metrics.Meter
 
 	lock sync.RWMutex
@@ -314,30 +365,30 @@ func (rx *RandomX) Seal(chain consensus.ChainHeaderReader, block *types.Block, r
 			for {
 				select {
 				case <-stop:
-					rx.hashrate.Mark(attempts)
+					rx.markAttempts(attempts)
 					return
 				case <-found:
-					rx.hashrate.Mark(attempts)
+					rx.markAttempts(attempts)
 					return
 				default:
 				}
 
 				attempts++
 				if (attempts % 16) == 0 {
-					rx.hashrate.Mark(attempts)
+					rx.markAttempts(attempts)
 					attempts = 0
 				}
 
 				input := MiningInput(sealHash, nonce)
 				rxHash, err := ctx.CalculateHash(input)
 				if err != nil {
-					rx.hashrate.Mark(attempts)
+					rx.markAttempts(attempts)
 					return
 				}
 
 				hashNum := HashToBig(rxHash)
 				if hashNum.Cmp(target) <= 0 {
-					rx.hashrate.Mark(attempts)
+					rx.markAttempts(attempts)
 					abortOnce.Do(func() {
 						foundNonce = nonce
 						foundHash = rxHash
@@ -376,6 +427,14 @@ func (rx *RandomX) Seal(chain consensus.ChainHeaderReader, block *types.Block, r
 	}
 }
 
+func (rx *RandomX) markAttempts(attempts int64) {
+	if attempts <= 0 {
+		return
+	}
+	rx.tracker.Mark(attempts)
+	rx.hashrate.Mark(attempts)
+}
+
 // CalcDifficulty returns the difficulty of the next block.
 func (rx *RandomX) CalcDifficulty(chain consensus.ChainHeaderReader, time uint64, parent *types.Header) *big.Int {
 	return CalculateDifficulty(chain, time, parent)
@@ -383,8 +442,14 @@ func (rx *RandomX) CalcDifficulty(chain consensus.ChainHeaderReader, time uint64
 
 // Hashrate implements consensus.PoW, returning the current mining hashrate of local and remote miners.
 func (rx *RandomX) Hashrate() float64 {
-	ms := rx.hashrate.Snapshot()
-	localRate := ms.Rate1()
+	localRate := rx.tracker.Rate()
+	if localRate == 0 {
+		ms := rx.hashrate.Snapshot()
+		localRate = ms.Rate1()
+		if localRate == 0 && ms.Count() > 0 {
+			localRate = ms.RateMean()
+		}
+	}
 
 	if rx.remote == nil {
 		return localRate
