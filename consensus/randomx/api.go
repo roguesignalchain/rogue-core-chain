@@ -89,15 +89,5 @@ func (api *API) SubmitHashrate(rate hexutil.Uint64, id common.Hash) bool {
 
 // GetHashrate returns total combined hashrate of local and remote miners.
 func (api *API) GetHashrate() uint64 {
-	if api.rx.remote == nil {
-		return 0
-	}
-
-	res := make(chan uint64, 1)
-	select {
-	case api.rx.remote.fetchRateCh <- res:
-		return <-res
-	case <-api.rx.remote.exitCh:
-		return 0
-	}
+	return uint64(api.rx.Hashrate())
 }

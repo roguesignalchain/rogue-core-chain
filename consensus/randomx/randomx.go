@@ -15,6 +15,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/rpc"
 	"golang.org/x/crypto/sha3"
@@ -31,7 +32,7 @@ var (
 	ErrUnclesNotAllowed = errors.New("uncles not allowed on Rogue Signal")
 )
 
-// RandomX implements the consensus.Engine interface for Rogue Signal using RandomX (rx/0).
+// RandomX implements the consensus.Engine and consensus.PoW interfaces for Rogue Signal using RandomX (rx/0).
 type RandomX struct {
 	fastMode bool
 	threads  int
@@ -39,6 +40,8 @@ type RandomX struct {
 
 	epochs *EpochManager
 	remote *remoteSealer
+
+	hashrate metrics.Meter
 
 	lock sync.RWMutex
 }
@@ -64,6 +67,7 @@ func New(cfg Config) *RandomX {
 		threads:  cfg.Threads,
 		treasury: treasury,
 		epochs:   NewEpochManager(cfg.FastMode),
+		hashrate: metrics.NewMeter(),
 	}
 	rx.remote = startRemoteSealer(rx, cfg.NotifyURLs, cfg.NoVerify)
 	return rx
@@ -305,24 +309,35 @@ func (rx *RandomX) Seal(chain consensus.ChainHeaderReader, block *types.Block, r
 
 			// Each thread starts searching from an independent randomized nonce offset
 			nonce := rand.Uint64() + uint64(tid)*0x100000000
+			var attempts int64
 
 			for {
 				select {
 				case <-stop:
+					rx.hashrate.Mark(attempts)
 					return
 				case <-found:
+					rx.hashrate.Mark(attempts)
 					return
 				default:
+				}
+
+				attempts++
+				if (attempts % 16) == 0 {
+					rx.hashrate.Mark(attempts)
+					attempts = 0
 				}
 
 				input := MiningInput(sealHash, nonce)
 				rxHash, err := ctx.CalculateHash(input)
 				if err != nil {
+					rx.hashrate.Mark(attempts)
 					return
 				}
 
 				hashNum := HashToBig(rxHash)
 				if hashNum.Cmp(target) <= 0 {
+					rx.hashrate.Mark(attempts)
 					abortOnce.Do(func() {
 						foundNonce = nonce
 						foundHash = rxHash
@@ -364,6 +379,26 @@ func (rx *RandomX) Seal(chain consensus.ChainHeaderReader, block *types.Block, r
 // CalcDifficulty returns the difficulty of the next block.
 func (rx *RandomX) CalcDifficulty(chain consensus.ChainHeaderReader, time uint64, parent *types.Header) *big.Int {
 	return CalculateDifficulty(chain, time, parent)
+}
+
+// Hashrate implements consensus.PoW, returning the current mining hashrate of local and remote miners.
+func (rx *RandomX) Hashrate() float64 {
+	ms := rx.hashrate.Snapshot()
+	localRate := ms.Rate1()
+
+	if rx.remote == nil {
+		return localRate
+	}
+
+	var res = make(chan uint64, 1)
+	select {
+	case rx.remote.fetchRateCh <- res:
+		return localRate + float64(<-res)
+	case <-rx.remote.exitCh:
+		return localRate
+	default:
+		return localRate
+	}
 }
 
 // APIs returns consensus RPC APIs for eth and randomx namespaces.
