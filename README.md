@@ -21,6 +21,7 @@
   - [Compilation on Linux](#compilation-on-linux)
   - [Compilation on macOS](#compilation-on-macos)
   - [Compilation on Windows](#compilation-on-windows)
+  - [Automation & Release Scripts (`scripts/`)](#-automation--release-scripts-scripts)
 - [Running Unit & Consensus Tests](#-running-unit--consensus-tests)
 - [Node Operations & Useful Commands](#-node-operations--useful-commands)
   - [1. Initializing the Blockchain](#1-initializing-the-blockchain)
@@ -221,6 +222,19 @@ git clone --recurse-submodules https://github.com/roguesignalchain/core-rogue.gi
 cd core-rogue
 mingw32-make core-rogue
 ```
+
+### Automation & Release Scripts (`scripts/`)
+
+The repository includes a suite of native automation scripts in [`scripts/`](file:///media/carlos/DATA1/DEV/blockchain_pow/rogue-core-chain/scripts) for builds, headless CLI packaging, service deployment, and pre-release audits:
+
+| Script | Purpose | Usage |
+| :--- | :--- | :--- |
+| [`scripts/build-core.sh`](file:///media/carlos/DATA1/DEV/blockchain_pow/rogue-core-chain/scripts/build-core.sh) | Compiles `librandomx.a` and `core-rogue` with Git metadata injection and updates desktop sidecar if present. | `./scripts/build-core.sh` |
+| [`scripts/package-cli.sh`](file:///media/carlos/DATA1/DEV/blockchain_pow/rogue-core-chain/scripts/package-cli.sh) | Bundles standalone `rogue-core-cli` tarball with binary, genesis config, systemd installer, and SHA256 checksum into `dist/`. (Also invoked via `make dist`). | `make dist` or `./scripts/package-cli.sh` |
+| [`scripts/install-service.sh`](file:///media/carlos/DATA1/DEV/blockchain_pow/rogue-core-chain/scripts/install-service.sh) | AI-ready unattended or interactive systemd service installer (`--user` or `--system`). Initializes genesis automatically. | `./scripts/install-service.sh --user` |
+| [`scripts/verify-release.sh`](file:///media/carlos/DATA1/DEV/blockchain_pow/rogue-core-chain/scripts/verify-release.sh) | Automated pre-release audit: checks zero secrets/wallets, compiles core, checks sidecar, and verifies git cleanliness. | `./scripts/verify-release.sh` |
+| [`scripts/build-windows.ps1`](file:///media/carlos/DATA1/DEV/blockchain_pow/rogue-core-chain/scripts/build-windows.ps1) | PowerShell build script for MinGW-w64 on Windows (`librandomx.a`, `core-rogue.exe`, and optional desktop installer). | `powershell -ExecutionPolicy Bypass -File .\scripts\build-windows.ps1` |
+| [`scripts/clean-remote-tags.sh`](file:///media/carlos/DATA1/DEV/blockchain_pow/rogue-core-chain/scripts/clean-remote-tags.sh) | Cleans legacy upstream tags from GitHub origin to maintain clean release tags. | `./scripts/clean-remote-tags.sh` |
 
 ---
 

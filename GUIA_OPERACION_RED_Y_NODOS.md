@@ -321,5 +321,33 @@ Una vez abierta la aplicación gráfica:
 
 ---
 
+## 🤖 10. Automatización de Servicios y Empaquetado (`scripts/`)
+
+El repositorio incluye herramientas automatizadas en `scripts/` para simplificar la ejecución permanente del nodo y la distribución para servidores headless:
+
+### 10.1 Instalación como Servicio Automático (systemd)
+Para ejecutar el nodo como servicio en segundo plano permanente con reinicio automático:
+
+```bash
+# Como servicio de usuario (sin necesidad de root):
+./scripts/install-service.sh --user
+
+# O como servicio con minería automática y dirección coinbase:
+./scripts/install-service.sh --user --mine --threads 4 --coinbase 0xTuDireccion...
+
+# Consultar el estado del servicio:
+systemctl --user status rogue-node.service
+```
+
+### 10.2 Empaquetado Headless CLI
+Para generar el paquete descargable independiente para servidores Linux con verificación SHA256:
+
+```bash
+make dist
+# Genera rogue-core-cli_<version>_linux_x86_64.tar.gz en dist/
+```
+
+---
+
 *Desarrollado y mantenido bajo las directrices oficiales del ecosistema Rogue Signal.*
 

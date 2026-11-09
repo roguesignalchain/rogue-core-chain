@@ -36,7 +36,7 @@ core-rogue: geth
 
 #? dist: Package standalone CLI release tarball into dist/
 dist: core-rogue
-	@$(ROOT_DIR)/../scripts/package-cli.sh
+	@$(ROOT_DIR)/scripts/package-cli.sh
 
 
 #? geth: Build geth

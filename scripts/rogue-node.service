@@ -1,0 +1,30 @@
+[Unit]
+Description=Rogue Signal Headless Node (core-rogue)
+After=network.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=%I
+Environment="ROGUE_DATADIR=%h/.local/share/rogue-signal/chaindata"
+ExecStartPre=/usr/local/bin/core-rogue --rogue --datadir ${ROGUE_DATADIR} init /etc/rogue-signal/genesis.json
+ExecStart=/usr/local/bin/core-rogue \
+    --rogue \
+    --datadir ${ROGUE_DATADIR} \
+    --http \
+    --http.addr 127.0.0.1 \
+    --http.port 38849 \
+    --http.api eth,net,web3,rogue \
+    --port 38890 \
+    --nat any \
+    --syncmode full \
+    --cache 512
+Restart=always
+RestartSec=5s
+LimitNOFILE=65535
+TimeoutStopSec=30s
+KillSignal=SIGTERM
+
+[Install]
+WantedBy=multi-user.target
+
