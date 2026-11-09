@@ -2,7 +2,7 @@
 # with Go source code. If you know what GOPATH is then you probably
 # don't need to bother with make.
 
-.PHONY: geth android ios geth-cross evm evmc mkdocs-serve all test clean randomx librandomx core-rogue
+.PHONY: geth android ios geth-cross evm evmc mkdocs-serve all test clean randomx librandomx core-rogue dist
 
 GOBIN = ./build/bin
 GO ?= latest
@@ -33,6 +33,11 @@ core-rogue: geth
 	@cp $(GOBIN)/geth $(GOBIN)/core-rogue
 	@echo "Done building Rogue Signal node."
 	@echo "Run \"$(GOBIN)/core-rogue\" to launch."
+
+#? dist: Package standalone CLI release tarball into dist/
+dist: core-rogue
+	@$(ROOT_DIR)/../scripts/package-cli.sh
+
 
 #? geth: Build geth
 geth: $(RANDOMX_LIB)

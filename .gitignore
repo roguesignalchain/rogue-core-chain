@@ -65,5 +65,11 @@ les/transactions.rlp
 consensus/randomx/lib/*.a
 consensus/randomx/randomx-src/build/
 
+# Distribution and release artifacts
+dist/
+/dist/
+*.tar.gz
+*.tar.gz.sha256
+
 # Local agent guidelines
 AGENTS.md
