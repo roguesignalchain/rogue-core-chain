@@ -134,11 +134,12 @@ func TestSealAndVerifySealIntegration(t *testing.T) {
 
 func TestVerifyHeadersBatch(t *testing.T) {
 	chain := NewFakeChainReader()
+	now := uint64(time.Now().Unix())
 
 	// Genesis header
 	genesis := &types.Header{
 		Number:     big.NewInt(0),
-		Time:       1000,
+		Time:       now - 120,
 		Difficulty: big.NewInt(0x10000),
 	}
 	chain.AddHeader(genesis)
@@ -150,32 +151,37 @@ func TestVerifyHeadersBatch(t *testing.T) {
 	h1 := &types.Header{
 		ParentHash: genesis.Hash(),
 		Number:     big.NewInt(1),
-		Time:       genesis.Time + 10,
+		Time:       genesis.Time + 30,
 		GasLimit:   60000000,
+		Extra:      []byte("Rogue Node v0.1.0"),
 	}
 	h1.Difficulty = CalculateDifficulty(chain, h1.Time, genesis)
+
+	tempChain := NewFakeChainReader()
+	tempChain.AddHeader(genesis)
+	tempChain.AddHeader(h1)
 
 	h2 := &types.Header{
 		ParentHash: h1.Hash(),
 		Number:     big.NewInt(2),
-		Time:       h1.Time + 10,
+		Time:       h1.Time + 30,
 		GasLimit:   60000000,
 	}
-	// For difficulty of h2, h1 is parent
-	h2.Difficulty = h1.Difficulty // when LWMA has only h1, falls back or computes from h1
+	h2.Difficulty = CalculateDifficulty(tempChain, h2.Time, h1)
+	tempChain.AddHeader(h2)
 
 	h3 := &types.Header{
 		ParentHash: h2.Hash(),
 		Number:     big.NewInt(3),
-		Time:       h2.Time + 10,
+		Time:       h2.Time + 30,
 		GasLimit:   60000000,
 	}
-	h3.Difficulty = h2.Difficulty
+	h3.Difficulty = CalculateDifficulty(tempChain, h3.Time, h2)
 
 	headers := []*types.Header{h1, h2, h3}
 	seals := []bool{false, false, false}
 
-	// In the old code, h2 and h3 failed with ErrUnknownAncestor because neither h1 nor h2 was in chain
+	// Verify batch where ancestors h1 and h2 are only in the batch and not yet in chain
 	abort, results := rx.VerifyHeaders(chain, headers, seals)
 	defer close(abort)
 
@@ -184,6 +190,125 @@ func TestVerifyHeadersBatch(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Header #%d (%s) failed verification: %v", header.Number.Uint64(), header.Hash().Hex(), err)
 		}
+	}
+}
+
+func TestExtraDataLimitValidation(t *testing.T) {
+	chain := NewFakeChainReader()
+	now := uint64(time.Now().Unix())
+
+	genesis := &types.Header{
+		Number:     big.NewInt(0),
+		Time:       now - 60,
+		Difficulty: big.NewInt(0x10000),
+	}
+	chain.AddHeader(genesis)
+
+	rx := New(Config{FastMode: false, Threads: 1})
+	defer rx.Close()
+
+	// Exactly 64 bytes of ExtraData must be accepted
+	validExtra := make([]byte, MaxExtraDataSize)
+	hValid := &types.Header{
+		ParentHash: genesis.Hash(),
+		Number:     big.NewInt(1),
+		Time:       now,
+		GasLimit:   60000000,
+		Extra:      validExtra,
+	}
+	hValid.Difficulty = CalculateDifficulty(chain, hValid.Time, genesis)
+	if err := rx.VerifyHeader(chain, hValid, false); err != nil {
+		t.Fatalf("Expected 64-byte ExtraData to be valid, got: %v", err)
+	}
+
+	// 65 bytes of ExtraData must be rejected with ErrExtraDataTooLong
+	oversizedExtra := make([]byte, MaxExtraDataSize+1)
+	hInvalid := &types.Header{
+		ParentHash: genesis.Hash(),
+		Number:     big.NewInt(1),
+		Time:       now,
+		GasLimit:   60000000,
+		Extra:      oversizedExtra,
+	}
+	hInvalid.Difficulty = CalculateDifficulty(chain, hInvalid.Time, genesis)
+	if err := rx.VerifyHeader(chain, hInvalid, false); err == nil {
+		t.Fatal("Expected oversized 65-byte ExtraData to be rejected, but got nil")
+	}
+}
+
+func TestPrepareMTP11Adjustment(t *testing.T) {
+	chain := NewFakeChainReader()
+	rx := New(Config{FastMode: false, Threads: 1})
+	defer rx.Close()
+
+	// Construct 11 headers where earlier blocks have higher timestamps than the last parent
+	// (valid under MTP-11 when mined, resulting in MTP11(parent) > parent.Time)
+	times := []uint64{1000, 1030, 1060, 1090, 1120, 1150, 1180, 1210, 1240, 1270, 1100}
+	var parent *types.Header
+	for i, ts := range times {
+		h := &types.Header{
+			Number:     big.NewInt(int64(i)),
+			Time:       ts,
+			Difficulty: big.NewInt(0x10000),
+		}
+		if parent != nil {
+			h.ParentHash = parent.Hash()
+		}
+		chain.AddHeader(h)
+		parent = h
+	}
+
+	mtp := CalculateMTP11(chain, parent)
+	if mtp <= parent.Time {
+		t.Fatalf("Test setup expected mtp (%d) > parent.Time (%d)", mtp, parent.Time)
+	}
+
+	// Simulate worker.go setting candidate.Time = parent.Time + 1 (1101 <= mtp 1150)
+	candidate := &types.Header{
+		ParentHash: parent.Hash(),
+		Number:     big.NewInt(11),
+		Time:       parent.Time + 1,
+		GasLimit:   60000000,
+	}
+
+	if err := rx.Prepare(chain, candidate); err != nil {
+		t.Fatalf("Prepare failed: %v", err)
+	}
+
+	if candidate.Time <= mtp {
+		t.Fatalf("Prepare did not advance candidate.Time past MTP-11: got %d, mtp %d", candidate.Time, mtp)
+	}
+}
+
+func TestConsensusStatusAndEpochInfoAPI(t *testing.T) {
+	chain := NewFakeChainReader()
+	genesis := &types.Header{
+		Number:     big.NewInt(0),
+		Time:       1000,
+		Difficulty: big.NewInt(0x10000),
+	}
+	chain.AddHeader(genesis)
+
+	rx := New(Config{FastMode: false, Threads: 1})
+	defer rx.Close()
+
+	api := &API{rx: rx, chain: chain}
+	status := api.GetConsensusStatus()
+
+	if status.TargetBlockTime != 30 {
+		t.Errorf("Expected TargetBlockTime 30, got %d", status.TargetBlockTime)
+	}
+	if status.MaxReorgDepth != 90 {
+		t.Errorf("Expected MaxReorgDepth 90, got %d", status.MaxReorgDepth)
+	}
+	if status.MaxExtraDataSize != 64 {
+		t.Errorf("Expected MaxExtraDataSize 64, got %d", status.MaxExtraDataSize)
+	}
+	if status.HalvingInterval != 2100000 {
+		t.Errorf("Expected HalvingInterval 2100000, got %d", status.HalvingInterval)
+	}
+	if !status.MESSActive {
+		t.Error("Expected MESSActive to be true")
 	}
 }
 

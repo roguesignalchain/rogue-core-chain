@@ -11,11 +11,17 @@ import (
 )
 
 const (
-	// DefaultLWMAWindow is the number of historical blocks used for LWMA-1 difficulty adjustment.
+	// DefaultLWMAWindow is the number of historical blocks used for LWMA-1 difficulty adjustment (60 blocks = ~30 minutes at 30s/block).
 	DefaultLWMAWindow = 60
 
-	// DefaultTargetBlockTime is the target block interval in seconds for Rogue Signal.
-	DefaultTargetBlockTime = 10
+	// DefaultTargetBlockTime is the target block interval in seconds for Rogue Signal (30 seconds).
+	DefaultTargetBlockTime = 30
+
+	// MTPWindow is the number of ancestor blocks used to compute the Past Median Time (MTP-11).
+	MTPWindow = 11
+
+	// MaxFutureDrift is the maximum allowed future timestamp drift in seconds (15 seconds).
+	MaxFutureDrift = 15
 
 	// MaxClampUpFactor is the maximum multiplier for difficulty increase per block (133%).
 	MaxClampUpFactor = 133
@@ -193,7 +199,7 @@ func CalculateMTP11(chain consensus.ChainHeaderReader, parent *types.Header) uin
 		return 0
 	}
 
-	count := 11
+	count := MTPWindow
 	times := make([]uint64, 0, count)
 
 	curr := parent
@@ -226,15 +232,14 @@ func CalculateMTP11(chain consensus.ChainHeaderReader, parent *types.Header) uin
 
 // VerifyHeaderTime checks that:
 // 1. Header.Time > MTP11(parent)
-// 2. Header.Time <= now + maxDrift (15 seconds)
+// 2. Header.Time <= now + MaxFutureDrift (15 seconds)
 func VerifyHeaderTime(chain consensus.ChainHeaderReader, header *types.Header, parent *types.Header, now uint64) error {
 	mtp := CalculateMTP11(chain, parent)
 	if header.Time <= mtp {
 		return ErrOlderBlockTime
 	}
 
-	const maxFutureDrift = 15 // 15 seconds
-	if header.Time > now+maxFutureDrift {
+	if header.Time > now+MaxFutureDrift {
 		return consensus.ErrFutureBlock
 	}
 

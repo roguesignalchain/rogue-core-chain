@@ -27,6 +27,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus/ethash"
 	"github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/params"
@@ -352,4 +353,120 @@ func TestVerkleGenesisCommit(t *testing.T) {
 	if !rawdb.ExistsAccountTrieNode(db, nil) {
 		t.Fatal("could not find node")
 	}
+}
+
+func TestRogueGenesisBlockAndFinality(t *testing.T) {
+	rogueGenesis := params.DefaultRogueGenesisBlock()
+	block := GenesisToBlock(rogueGenesis, nil)
+	t.Logf("Computed RogueGenesisHash: %s", block.Hash().Hex())
+	if block.Hash() != params.RogueGenesisHash {
+		t.Errorf("RogueGenesisHash mismatch: have %s, want %s", params.RogueGenesisHash.Hex(), block.Hash().Hex())
+	}
+	if reqHash, ok := params.RogueChainConfig.RequireBlockHashes[0]; !ok || reqHash != block.Hash() {
+		t.Errorf("RequireBlockHashes[0] mismatch: have %s, want %s", reqHash.Hex(), block.Hash().Hex())
+	}
+	if !params.RogueChainConfig.IsEnabled(params.RogueChainConfig.GetECBP1100Transition, big.NewInt(0)) {
+		t.Error("Expected ECBP-1100 (MESS) to be enabled from block 0 on RogueChainConfig")
+	}
+}
+
+type mockRogueHeaderReader struct {
+	headers map[common.Hash]*types.Header
+	tds     map[common.Hash]*big.Int
+}
+
+func (m *mockRogueHeaderReader) Config() ctypes.ChainConfigurator {
+	return params.RogueChainConfig
+}
+func (m *mockRogueHeaderReader) CurrentHeader() *types.Header { return nil }
+func (m *mockRogueHeaderReader) GetHeader(hash common.Hash, number uint64) *types.Header {
+	return m.headers[hash]
+}
+func (m *mockRogueHeaderReader) GetHeaderByNumber(number uint64) *types.Header { return nil }
+func (m *mockRogueHeaderReader) GetHeaderByHash(hash common.Hash) *types.Header {
+	return m.headers[hash]
+}
+func (m *mockRogueHeaderReader) GetTd(hash common.Hash, number uint64) *big.Int {
+	return m.tds[hash]
+}
+
+func TestRogueMaxReorgDepthFinality(t *testing.T) {
+	reader := &mockRogueHeaderReader{
+		headers: make(map[common.Hash]*types.Header),
+		tds:     make(map[common.Hash]*big.Int),
+	}
+
+	genesis := &types.Header{Number: big.NewInt(0), Time: 1000, Difficulty: big.NewInt(100)}
+	reader.headers[genesis.Hash()] = genesis
+	reader.tds[genesis.Hash()] = big.NewInt(100)
+
+	// Build canonical chain of 100 blocks
+	curr := genesis
+	var block50, block90 *types.Header
+	for i := int64(1); i <= 100; i++ {
+		h := &types.Header{
+			ParentHash: curr.Hash(),
+			Number:     big.NewInt(i),
+			Time:       curr.Time + 30,
+			Difficulty: big.NewInt(100),
+			Extra:      []byte("canonical"),
+		}
+		reader.headers[h.Hash()] = h
+		reader.tds[h.Hash()] = new(big.Int).Add(reader.tds[curr.Hash()], h.Difficulty)
+		if i == 50 {
+			block50 = h
+		}
+		if i == 90 {
+			block90 = h
+		}
+		curr = h
+	}
+	canonHead := curr // Block 100
+
+	fc := NewForkChoice(reader, nil)
+
+	// 1. Fork from block 90 (reorg depth = 100 - 90 = 10 <= 90) with higher TD -> Allowed
+	forkShallow := block90
+	for i := int64(91); i <= 101; i++ {
+		h := &types.Header{
+			ParentHash: forkShallow.Hash(),
+			Number:     big.NewInt(i),
+			Time:       forkShallow.Time + 30,
+			Difficulty: big.NewInt(200),
+			Extra:      []byte("shallow-fork"),
+		}
+		reader.headers[h.Hash()] = h
+		reader.tds[h.Hash()] = new(big.Int).Add(reader.tds[forkShallow.Hash()], h.Difficulty)
+		forkShallow = h
+	}
+	allowed, err := fc.ReorgNeeded(canonHead, forkShallow)
+	if err != nil {
+		t.Fatalf("ReorgNeeded returned unexpected error: %v", err)
+	}
+	if !allowed {
+		t.Error("Expected shallow reorg (depth 10 <= 90) with higher TD to be allowed")
+	}
+
+	// 2. Fork from block 0 (reorg depth = 100 > 90) even with 10x higher TD -> Rejected
+	forkDeep := genesis
+	for i := int64(1); i <= 105; i++ {
+		h := &types.Header{
+			ParentHash: forkDeep.Hash(),
+			Number:     big.NewInt(i),
+			Time:       forkDeep.Time + 30,
+			Difficulty: big.NewInt(1000),
+			Extra:      []byte("deep-51-attack"),
+		}
+		reader.headers[h.Hash()] = h
+		reader.tds[h.Hash()] = new(big.Int).Add(reader.tds[forkDeep.Hash()], h.Difficulty)
+		forkDeep = h
+	}
+	allowedDeep, err := fc.ReorgNeeded(canonHead, forkDeep)
+	if err != nil {
+		t.Fatalf("ReorgNeeded returned unexpected error on deep reorg: %v", err)
+	}
+	if allowedDeep {
+		t.Error("Expected deep reorg (depth 100 > MaxRogueReorgDepth 90) to be rejected")
+	}
+	_ = block50
 }

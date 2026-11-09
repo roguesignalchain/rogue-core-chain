@@ -10,8 +10,8 @@ import (
 )
 
 const (
-	// HalvingInterval is the number of blocks between reward halvings (6,300,000 blocks = ~2 years at 10s/block).
-	HalvingInterval = uint64(6300000)
+	// HalvingInterval is the number of blocks between reward halvings (2,100,000 blocks = ~2 years at 30s/block).
+	HalvingInterval = uint64(2100000)
 
 	// MaxHalvingEras is the maximum number of halving eras before block rewards become 0.
 	MaxHalvingEras = uint64(32)
@@ -30,8 +30,8 @@ var (
 	// WeiPerROGUE is 10^18 wei (1 ROGUE).
 	WeiPerROGUE = new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil)
 
-	// InitialBaseReward is 8 ROGUE in wei.
-	InitialBaseReward = new(big.Int).Mul(big.NewInt(8), WeiPerROGUE)
+	// InitialBaseReward is 24 ROGUE in wei (22.8 ROGUE miner + 1.2 ROGUE treasury at 30s/block).
+	InitialBaseReward = new(big.Int).Mul(big.NewInt(24), WeiPerROGUE)
 
 	// MaxSupplyCap is approximately 100,000,000 ROGUE in wei (exact theoretical total: 100,800,000 ROGUE).
 	MaxSupplyCap = new(big.Int).Mul(big.NewInt(100800000), WeiPerROGUE)
@@ -43,10 +43,10 @@ var (
 // CalculateBlockReward calculates the total block reward for a given block number.
 //
 // Rules:
-//   - Era 0 (blocks 1 .. 6,300,000): 8 ROGUE (8 * 10^18 wei)
-//   - Era 1 (blocks 6,300,001 .. 12,600,000): 4 ROGUE
-//   - Era 2 (blocks 12,600,001 .. 18,900,000): 2 ROGUE
-//   - Halves every 6,300,000 blocks.
+//   - Era 0 (blocks 1 .. 2,100,000): 24 ROGUE (24 * 10^18 wei)
+//   - Era 1 (blocks 2,100,001 .. 4,200,000): 12 ROGUE
+//   - Era 2 (blocks 4,200,001 .. 6,300,000): 6 ROGUE
+//   - Halves every 2,100,000 blocks (~2 years at 30s/block).
 //   - After era 32 (or if reward shifts to 0), returns 0 (Strict Cap).
 func CalculateBlockReward(blockNumber uint64) *big.Int {
 	if blockNumber == 0 {

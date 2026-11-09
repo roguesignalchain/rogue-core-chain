@@ -62,9 +62,14 @@ var (
 		// Cancun (MCOPY, TSTORE/TLOAD opcodes)
 		EIP5656FBlock: big.NewInt(0),
 
+		// ECBP-1100 (MESS - Modified Exponential Subjective Scoring artificial finality)
+		ECBP1100FBlock: big.NewInt(0),
+
 		// Defuse difficulty bomb forever (pure PoW RandomX difficulty managed by LWMA-1)
 		DisposalBlock: big.NewInt(0),
 
-		RequireBlockHashes: map[uint64]common.Hash{},
+		RequireBlockHashes: map[uint64]common.Hash{
+			0: RogueGenesisHash,
+		},
 	}
 )

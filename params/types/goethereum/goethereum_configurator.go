@@ -444,7 +444,14 @@ func (c *ChainConfig) SetEIP2537Transition(n *uint64) error {
 }
 
 func (c *ChainConfig) GetECBP1100Transition() *uint64 {
-	return bigNewU64(c.ecbp1100Transition)
+	if c.ecbp1100Transition != nil {
+		return bigNewU64(c.ecbp1100Transition)
+	}
+	if c.RandomX != nil {
+		zero := uint64(0)
+		return &zero
+	}
+	return nil
 }
 
 func (c *ChainConfig) SetECBP1100Transition(n *uint64) error {

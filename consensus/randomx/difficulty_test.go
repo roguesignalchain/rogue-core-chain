@@ -25,7 +25,7 @@ func TestDifficultyTargetConversion(t *testing.T) {
 func TestLWMAAdjustsUpWhenFast(t *testing.T) {
 	chain := NewFakeChainReader()
 
-	// Build a chain of 65 blocks solved in 5 seconds (target is 10 seconds)
+	// Build a chain of 65 blocks solved in 10 seconds (target is 30 seconds)
 	initDiff := big.NewInt(0x20000)
 	parent := &types.Header{
 		Number:     big.NewInt(0),
@@ -37,7 +37,7 @@ func TestLWMAAdjustsUpWhenFast(t *testing.T) {
 	for i := int64(1); i <= 65; i++ {
 		header := &types.Header{
 			Number:     big.NewInt(i),
-			Time:       parent.Time + 5, // Fast: 5 seconds
+			Time:       parent.Time + 10, // Fast: 10 seconds (target 30s)
 			Difficulty: initDiff,
 			ParentHash: parent.Hash(),
 		}
@@ -45,7 +45,7 @@ func TestLWMAAdjustsUpWhenFast(t *testing.T) {
 		parent = header
 	}
 
-	nextDiff := CalculateDifficulty(chain, parent.Time+5, parent)
+	nextDiff := CalculateDifficulty(chain, parent.Time+10, parent)
 	if nextDiff.Cmp(initDiff) <= 0 {
 		t.Errorf("Expected difficulty to increase when blocks are fast, got %v <= %v", nextDiff, initDiff)
 	}
@@ -61,7 +61,7 @@ func TestLWMAAdjustsUpWhenFast(t *testing.T) {
 func TestLWMAAdjustsDownWhenSlow(t *testing.T) {
 	chain := NewFakeChainReader()
 
-	// Build a chain of 65 blocks solved in 25 seconds (target is 10 seconds)
+	// Build a chain of 65 blocks solved in 75 seconds (target is 30 seconds)
 	initDiff := big.NewInt(0x40000)
 	parent := &types.Header{
 		Number:     big.NewInt(0),
@@ -73,7 +73,7 @@ func TestLWMAAdjustsDownWhenSlow(t *testing.T) {
 	for i := int64(1); i <= 65; i++ {
 		header := &types.Header{
 			Number:     big.NewInt(i),
-			Time:       parent.Time + 25, // Slow: 25 seconds
+			Time:       parent.Time + 75, // Slow: 75 seconds (target 30s)
 			Difficulty: initDiff,
 			ParentHash: parent.Hash(),
 		}
@@ -81,7 +81,7 @@ func TestLWMAAdjustsDownWhenSlow(t *testing.T) {
 		parent = header
 	}
 
-	nextDiff := CalculateDifficulty(chain, parent.Time+25, parent)
+	nextDiff := CalculateDifficulty(chain, parent.Time+75, parent)
 	if nextDiff.Cmp(initDiff) >= 0 {
 		t.Errorf("Expected difficulty to decrease when blocks are slow, got %v >= %v", nextDiff, initDiff)
 	}
@@ -91,6 +91,37 @@ func TestLWMAAdjustsDownWhenSlow(t *testing.T) {
 	minAllowed.Div(minAllowed, big.NewInt(ClampDenominator))
 	if nextDiff.Cmp(minAllowed) < 0 {
 		t.Errorf("Difficulty dropped below lower clamp limit: got %v, min %v", nextDiff, minAllowed)
+	}
+}
+
+func TestLWMACandidateTimestampIndependence(t *testing.T) {
+	chain := NewFakeChainReader()
+
+	initDiff := big.NewInt(0x40000)
+	parent := &types.Header{
+		Number:     big.NewInt(0),
+		Time:       1000,
+		Difficulty: initDiff,
+	}
+	chain.AddHeader(parent)
+
+	for i := int64(1); i <= 30; i++ {
+		header := &types.Header{
+			Number:     big.NewInt(i),
+			Time:       parent.Time + 30,
+			Difficulty: initDiff,
+			ParentHash: parent.Hash(),
+		}
+		chain.AddHeader(header)
+		parent = header
+	}
+
+	// A dishonest miner trying to manipulate their candidate header timestamp
+	// must get the exact same difficulty as an honest miner.
+	diffHonest := CalculateDifficulty(chain, parent.Time+30, parent)
+	diffManipulated := CalculateDifficulty(chain, parent.Time+100000, parent)
+	if diffHonest.Cmp(diffManipulated) != 0 {
+		t.Fatalf("LWMA-1 must be independent of candidate header timestamp: got %v vs %v", diffHonest, diffManipulated)
 	}
 }
 

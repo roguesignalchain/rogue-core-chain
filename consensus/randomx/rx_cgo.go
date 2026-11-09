@@ -90,7 +90,7 @@ func NewFastDataset(cache *LightCache, flags C.randomx_flags) (*FastDataset, err
 	}
 
 	itemCount := C.randomx_dataset_item_count()
-	workers := runtime.NumCPU()
+	workers := runtime.NumCPU() / 2
 	if workers < 1 {
 		workers = 1
 	}
@@ -186,13 +186,15 @@ func (v *VM) Destroy() {
 }
 
 // CalculateHash calculates the 32-byte RandomX hash using a pooled VM.
+// Holds a read lock on the context for the entire duration of the CGo execution
+// to prevent use-after-free if Close() is invoked concurrently during epoch rotation.
 func (ctx *RxContext) CalculateHash(input []byte) ([32]byte, error) {
 	ctx.mu.RLock()
+	defer ctx.mu.RUnlock()
+
 	if ctx.closed {
-		ctx.mu.RUnlock()
 		return [32]byte{}, errors.New("context is closed")
 	}
-	ctx.mu.RUnlock()
 
 	item := ctx.vmPool.Get()
 	if item == nil {

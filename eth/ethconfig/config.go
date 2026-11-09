@@ -79,9 +79,13 @@ var Defaults = Config{
 	TrieTimeout:        60 * time.Minute,
 	SnapshotCache:      102,
 	FilterLogCacheSize: 32,
-	Miner:              miner.DefaultConfig,
-	TxPool:             legacypool.DefaultConfig,
-	BlobPool:           blobpool.DefaultConfig,
+	Miner: miner.DefaultConfig,
+	TxPool: func() legacypool.Config {
+		cfg := legacypool.DefaultConfig
+		cfg.PriceLimit = vars.GWei
+		return cfg
+	}(),
+	BlobPool: blobpool.DefaultConfig,
 	RPCGasCap:          50000000,
 	RPCEVMTimeout:      5 * time.Second,
 	GPO:                FullNodeGPO,

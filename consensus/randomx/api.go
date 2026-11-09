@@ -49,3 +49,119 @@ func (api *API) SetFastMode(fastMode bool) bool {
 func (api *API) GetFastMode() bool {
 	return api.rx.IsFastMode()
 }
+
+// EpochInfo represents the RandomX epoch and seed rotation status at the current chain head.
+type EpochInfo struct {
+	BlockNumber          uint64      `json:"blockNumber"`
+	Epoch                uint64      `json:"epoch"`
+	EpochLength          uint64      `json:"epochLength"`
+	SeedLag              uint64      `json:"seedLag"`
+	SeedBlockNumber      uint64      `json:"seedBlockNumber"`
+	SeedHash             common.Hash `json:"seedHash"`
+	NextEpochBlock       uint64      `json:"nextEpochBlock"`
+	BlocksUntilNextEpoch uint64      `json:"blocksUntilNextEpoch"`
+	FastMode             bool        `json:"fastMode"`
+}
+
+// ConsensusStatus represents the real-time consensus parameters, monetary schedule, and active security defenses.
+type ConsensusStatus struct {
+	Algorithm           string         `json:"algorithm"`
+	TargetBlockTime     uint64         `json:"targetBlockTime"`
+	LWMAWindow          uint64         `json:"lwmaWindow"`
+	MTPWindow           uint64         `json:"mtpWindow"`
+	MaxFutureDrift      uint64         `json:"maxFutureDrift"`
+	MaxExtraDataSize    uint64         `json:"maxExtraDataSize"`
+	MaxReorgDepth       uint64         `json:"maxReorgDepth"`
+	MESSActive          bool           `json:"messActive"`
+	UnclesAllowed       bool           `json:"unclesAllowed"`
+	RemoteMiningAllowed bool           `json:"remoteMiningAllowed"`
+	CurrentBlock        uint64         `json:"currentBlock"`
+	CurrentEra          uint64         `json:"currentEra"`
+	HalvingInterval     uint64         `json:"halvingInterval"`
+	BlocksUntilHalving  uint64         `json:"blocksUntilHalving"`
+	BlockRewardWei      string         `json:"blockRewardWei"`
+	MinerRewardWei      string         `json:"minerRewardWei"`
+	TreasuryRewardWei   string         `json:"treasuryRewardWei"`
+	TreasuryAddress     common.Address `json:"treasuryAddress"`
+	FastMode            bool           `json:"fastMode"`
+	LocalHashrate       uint64         `json:"localHashrate"`
+	EpochInfo           EpochInfo      `json:"epochInfo"`
+}
+
+// GetEpochInfo returns the current RandomX epoch, seed block, seed hash, and transition countdown.
+func (api *API) GetEpochInfo() EpochInfo {
+	var headNum uint64
+	if api.chain != nil && api.chain.CurrentHeader() != nil {
+		headNum = api.chain.CurrentHeader().Number.Uint64()
+	}
+
+	epoch := EpochNumber(headNum)
+	seedBlock := SeedBlockNumber(epoch)
+	var seedHash common.Hash
+	if api.chain != nil {
+		if h, err := api.rx.epochs.GetSeed(epoch, api.chain); err == nil {
+			seedHash = h
+		} else if hdr := api.chain.GetHeaderByNumber(seedBlock); hdr != nil {
+			seedHash = hdr.Hash()
+		}
+	}
+
+	nextEpochBlock := (epoch + 1) * EpochLength
+	blocksRemaining := nextEpochBlock - headNum
+
+	return EpochInfo{
+		BlockNumber:          headNum,
+		Epoch:                epoch,
+		EpochLength:          EpochLength,
+		SeedLag:              SeedLag,
+		SeedBlockNumber:      seedBlock,
+		SeedHash:             seedHash,
+		NextEpochBlock:       nextEpochBlock,
+		BlocksUntilNextEpoch: blocksRemaining,
+		FastMode:             api.rx.IsFastMode(),
+	}
+}
+
+// GetConsensusStatus returns the comprehensive consensus and security status of the Rogue Signal node.
+func (api *API) GetConsensusStatus() ConsensusStatus {
+	epochInfo := api.GetEpochInfo()
+	headNum := epochInfo.BlockNumber
+
+	calcBlock := headNum
+	if calcBlock == 0 {
+		calcBlock = 1
+	}
+	era := (calcBlock - 1) / HalvingInterval
+	nextHalvingBlock := (era + 1) * HalvingInterval
+	var blocksUntilHalving uint64
+	if nextHalvingBlock > headNum {
+		blocksUntilHalving = nextHalvingBlock - headNum
+	}
+
+	totalReward := CalculateBlockReward(calcBlock)
+	minerReward, treasuryReward := SplitReward(totalReward)
+
+	return ConsensusStatus{
+		Algorithm:           "RandomX (rx/0)",
+		TargetBlockTime:     DefaultTargetBlockTime,
+		LWMAWindow:          DefaultLWMAWindow,
+		MTPWindow:           MTPWindow,
+		MaxFutureDrift:      MaxFutureDrift,
+		MaxExtraDataSize:    MaxExtraDataSize,
+		MaxReorgDepth:       MaxReorgDepth,
+		MESSActive:          true,
+		UnclesAllowed:       false,
+		RemoteMiningAllowed: false,
+		CurrentBlock:        headNum,
+		CurrentEra:          era,
+		HalvingInterval:     HalvingInterval,
+		BlocksUntilHalving:  blocksUntilHalving,
+		BlockRewardWei:      totalReward.String(),
+		MinerRewardWei:      minerReward.String(),
+		TreasuryRewardWei:   treasuryReward.String(),
+		TreasuryAddress:     api.rx.treasury,
+		FastMode:            api.rx.IsFastMode(),
+		LocalHashrate:       uint64(api.rx.Hashrate()),
+		EpochInfo:           epochInfo,
+	}
+}

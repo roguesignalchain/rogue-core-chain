@@ -20,14 +20,16 @@ Antes de iniciar cualquier proceso, se verificó el estado del entorno:
 | **Chain ID** | `800055` | Identificador único EVM (EIP-155) |
 | **Algoritmo PoW** | `RandomX` (`rx/0`) | Minería resistente a ASICs/GPUs exclusiva para CPU casera |
 | **Modo de Memoria** | `Light Mode (~256 MB)` | Por defecto siempre; opción `Fast Mode (~2.08 GB)` |
-| **Tiempo de Bloque** | 10 segundos | Frecuencia objetivo de emisión |
-| **Emisión por Bloque** | 8 ROGUE | Halving cada 6,300,000 bloques (~2 años) |
-| **Reparto de Minado** | 95% Minero / 5% Tesorería | 7.6 ROGUE al minero, 0.4 ROGUE a la tesorería |
+| **Tiempo de Bloque** | 30 segundos | Frecuencia objetivo de emisión con `< 0.5%` de bloques huérfanos |
+| **Emisión por Bloque** | 24 ROGUE | Halving cada 2,100,000 bloques (~2 años) |
+| **Reparto de Minado** | 95% Minero / 5% Tesorería | 22.8 ROGUE al minero (+ 100% comisiones), 1.2 ROGUE a la tesorería |
 | **Billetera Tesorería**| `0xe9aaE535B7971A9AC8C6af0e4B524D02260D3a03` | Recibe el 5% en cada bloque |
-| **Suministro Máximo** | 100,000,000 ROGUE | Hard cap estricto, sin emisión de cola |
-| **Dificultad (DAA)** | LWMA-1 ($N=60$) | Ajuste lineal ponderado por bloque |
+| **Suministro Máximo** | 100,000,000 ROGUE | Hard cap estricto (100.8M en 32 eras), sin emisión de cola |
+| **Dificultad (DAA)** | LWMA-1 ($N=60$) | Ajuste lineal ponderado por bloque (~30 min, $\pm 33\%$ clamp) |
 | **Reglas de Tiempo** | MTP-11 estricto | Límite de desvío futuro de 15 segundos |
-| **Rotación de Semilla** | Cada 2048 bloques | Semilla RandomX con lag de 64 bloques |
+| **Finalidad Anti-51%** | `MaxReorgDepth = 90` + MESS | Límite duro de 90 bloques (~45m) + gravedad polinómica ECBP-1100 |
+| **Rotación de Semilla** | Cada 2048 bloques (~17.07h) | Semilla RandomX con lag de 64 bloques (~32m) |
+| **Hash Bloque Génesis** | `0xc6f7f29d6a23f1921f3e514401a82a60ffa1f21885497dbf6414e8bb2f22b91d` | Anclado en `RequireBlockHashes[0]` |
 | **Puerto P2P por defecto** | `38888` | Protocolo devp2p eth/68 |
 | **Puerto HTTP RPC** | `38845` | API JSON-RPC |
 | **Puerto WS RPC** | `38846` | WebSocket JSON-RPC |

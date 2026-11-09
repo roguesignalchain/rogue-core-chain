@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math/big"
 	"math/rand"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -23,6 +24,14 @@ import (
 	"golang.org/x/crypto/sha3"
 )
 
+const (
+	// MaxExtraDataSize is the maximum size in bytes allowed for header.Extra on Rogue Signal (64 bytes).
+	MaxExtraDataSize = 64
+
+	// MaxReorgDepth is the maximum allowed chain reorganization depth in blocks (90 blocks = ~45 minutes at 30s/block).
+	MaxReorgDepth = 90
+)
+
 var (
 	// ErrInvalidPoW is returned when the RandomX proof of work does not meet the required target.
 	ErrInvalidPoW = errors.New("invalid RandomX proof of work")
@@ -32,6 +41,9 @@ var (
 
 	// ErrUnclesNotAllowed is returned when a block contains uncle headers (disabled on Rogue Signal).
 	ErrUnclesNotAllowed = errors.New("uncles not allowed on Rogue Signal")
+
+	// ErrExtraDataTooLong is returned when header.Extra exceeds MaxExtraDataSize (64 bytes).
+	ErrExtraDataTooLong = errors.New("header extra-data exceeds 64 bytes")
 )
 
 type hashrateTracker struct {
@@ -193,25 +205,32 @@ func (rx *RandomX) VerifyHeader(chain consensus.ChainHeaderReader, header *types
 }
 
 // verifyHeader performs full header validation given an already resolved parent header.
+// Phase 1 executes lightweight consensus rules in microseconds (ExtraData size, MTP-11 + 15s drift,
+// LWMA-1 difficulty, and GasLimit) before Phase 2 invokes the CPU-intensive RandomX CGo seal check.
 func (rx *RandomX) verifyHeader(chain consensus.ChainHeaderReader, header, parent *types.Header, seal bool) error {
-	// 1. Verify strict timestamp rules (MTP-11 + max 15s future drift)
+	// 1. Verify ExtraData size limit (<= 64 bytes) to prevent header bloat attacks
+	if len(header.Extra) > MaxExtraDataSize {
+		return fmt.Errorf("%w: have %d bytes, max %d bytes", ErrExtraDataTooLong, len(header.Extra), MaxExtraDataSize)
+	}
+
+	// 2. Verify strict timestamp rules (MTP-11 + max 15s future drift)
 	now := uint64(time.Now().Unix())
 	if err := VerifyHeaderTime(chain, header, parent, now); err != nil {
 		return err
 	}
 
-	// 2. Verify difficulty adjustment via LWMA-1
+	// 3. Verify difficulty adjustment via LWMA-1
 	expectedDifficulty := CalculateDifficulty(chain, header.Time, parent)
 	if header.Difficulty.Cmp(expectedDifficulty) != 0 {
 		return fmt.Errorf("invalid difficulty: have %v, want %v", header.Difficulty, expectedDifficulty)
 	}
 
-	// 3. Verify gas limit
+	// 4. Verify gas limit
 	if header.GasUsed > header.GasLimit {
 		return fmt.Errorf("gas used %d exceeds gas limit %d", header.GasUsed, header.GasLimit)
 	}
 
-	// 4. Verify seal if requested
+	// 5. Verify seal if requested (Phase 2)
 	if seal {
 		if err := rx.VerifySeal(chain, header); err != nil {
 			return err
@@ -221,7 +240,9 @@ func (rx *RandomX) verifyHeader(chain consensus.ChainHeaderReader, header, paren
 	return nil
 }
 
-// VerifyHeaders verifies a batch of headers concurrently.
+// VerifyHeaders verifies a batch of headers concurrently using a two-phase fail-fast pipeline:
+//   - Phase 1 validates lightweight header fields (ExtraData, MTP-11, LWMA-1 difficulty, GasUsed).
+//   - Phase 2 validates RandomX PoW seals in parallel across runtime.NumCPU() worker goroutines.
 func (rx *RandomX) VerifyHeaders(chain consensus.ChainHeaderReader, headers []*types.Header, seals []bool) (chan<- struct{}, <-chan error) {
 	abort := make(chan struct{})
 	results := make(chan error, len(headers))
@@ -243,35 +264,98 @@ func (rx *RandomX) VerifyHeaders(chain consensus.ChainHeaderReader, headers []*t
 	}
 
 	go func() {
-		for i, header := range headers {
-			number := header.Number.Uint64()
-			var parent *types.Header
-			if number == 0 {
+		n := len(headers)
+		errs := make([]error, n)
+		done := make([]chan struct{}, n)
+		for i := range done {
+			done[i] = make(chan struct{})
+		}
+
+		workers := runtime.NumCPU()
+		if workers < 1 {
+			workers = 1
+		}
+		if workers > n {
+			workers = n
+		}
+		sem := make(chan struct{}, workers)
+
+		// Producer: run Phase 1 fail-fast checks and dispatch Phase 2 seal checks to worker pool
+		go func() {
+			for i, header := range headers {
 				select {
 				case <-abort:
+					close(done[i])
 					return
-				case results <- nil:
+				default:
 				}
-				continue
-			}
 
-			if i > 0 && headers[i-1].Hash() == header.ParentHash {
-				parent = headers[i-1]
-			} else {
-				parent = batchReader.GetHeader(header.ParentHash, number-1)
-			}
+				number := header.Number.Uint64()
+				if number == 0 {
+					close(done[i])
+					continue
+				}
 
-			var err error
-			if parent == nil {
-				err = consensus.ErrUnknownAncestor
-			} else {
-				err = rx.verifyHeader(batchReader, header, parent, seals[i])
-			}
+				var parent *types.Header
+				if i > 0 && headers[i-1].Hash() == header.ParentHash {
+					parent = headers[i-1]
+				} else {
+					parent = batchReader.GetHeader(header.ParentHash, number-1)
+				}
 
+				if parent == nil {
+					errs[i] = consensus.ErrUnknownAncestor
+					close(done[i])
+					continue
+				}
+
+				// Phase 1: Fast lightweight validation (microseconds)
+				if err := rx.verifyHeader(batchReader, header, parent, false); err != nil {
+					errs[i] = err
+					close(done[i])
+					continue
+				}
+
+				// If seal verification is not requested for this header, we are done
+				if i >= len(seals) || !seals[i] {
+					close(done[i])
+					continue
+				}
+
+				// Phase 2: Parallel RandomX PoW seal verification
+				select {
+				case <-abort:
+					close(done[i])
+					return
+				case sem <- struct{}{}:
+				}
+
+				go func(idx int, h *types.Header) {
+					defer func() {
+						<-sem
+						close(done[idx])
+					}()
+					select {
+					case <-abort:
+						return
+					default:
+					}
+					errs[idx] = rx.VerifySeal(batchReader, h)
+				}(i, header)
+			}
+		}()
+
+		// Consumer: emit verification results in strict header order
+		for i := 0; i < n; i++ {
 			select {
 			case <-abort:
 				return
-			case results <- err:
+			case <-done[i]:
+			}
+			select {
+			case <-abort:
+				return
+			case results <- errs[i]:
 			}
 		}
 	}()
@@ -293,6 +377,12 @@ func (rx *RandomX) Prepare(chain consensus.ChainHeaderReader, header *types.Head
 	if parent == nil {
 		return consensus.ErrUnknownAncestor
 	}
+
+	// Ensure header.Time strictly exceeds MTP-11(parent) even if recent blocks had out-of-order timestamps
+	if mtp := CalculateMTP11(chain, parent); header.Time <= mtp {
+		header.Time = mtp + 1
+	}
+
 	header.Difficulty = CalculateDifficulty(chain, header.Time, parent)
 	header.UncleHash = types.EmptyUncleHash
 

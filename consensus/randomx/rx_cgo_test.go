@@ -94,3 +94,28 @@ func TestConcurrentHashing(t *testing.T) {
 	}
 }
 
+func TestConcurrentHashingAndCloseRace(t *testing.T) {
+	ctx, err := NewRxContext([]byte("test key race 001"), false)
+	if err != nil {
+		t.Fatalf("Failed to create RxContext: %v", err)
+	}
+
+	const workers = 4
+	done := make(chan struct{})
+	for i := 0; i < workers; i++ {
+		go func(id int) {
+			for j := 0; j < 8; j++ {
+				_, _ = ctx.CalculateHash([]byte("concurrent hash input under close"))
+			}
+			done <- struct{}{}
+		}(i)
+	}
+
+	// Trigger Close concurrently while hashing goroutines are in flight
+	ctx.Close()
+
+	for i := 0; i < workers; i++ {
+		<-done
+	}
+}
+

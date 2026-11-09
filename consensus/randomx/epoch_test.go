@@ -76,3 +76,43 @@ func TestEpochContextResolution(t *testing.T) {
 		t.Fatalf("Expected 32-byte hash, got %d", len(hash))
 	}
 }
+
+func TestEpochSeedReorgInvalidation(t *testing.T) {
+	chain := NewFakeChainReader()
+
+	// Seed block for epoch 1 is block 1984 (2048 - 64)
+	seedBlockA := &types.Header{
+		Number: big.NewInt(1984),
+		Time:   10000,
+		Extra:  []byte("branch-A"),
+	}
+	chain.AddHeader(seedBlockA)
+
+	em := NewEpochManager(false)
+	defer em.Close()
+
+	seed1, err := em.GetSeed(1, chain)
+	if err != nil {
+		t.Fatalf("GetSeed(1) failed on branch A: %v", err)
+	}
+	if seed1 != seedBlockA.Hash() {
+		t.Fatalf("Expected seed %s, got %s", seedBlockA.Hash().Hex(), seed1.Hex())
+	}
+
+	// Simulate a legitimate chain reorganization replacing block 1984 with branch B
+	chainReorg := NewFakeChainReader()
+	seedBlockB := &types.Header{
+		Number: big.NewInt(1984),
+		Time:   10005,
+		Extra:  []byte("branch-B"),
+	}
+	chainReorg.AddHeader(seedBlockB)
+
+	seed2, err := em.GetSeed(1, chainReorg)
+	if err != nil {
+		t.Fatalf("GetSeed(1) failed after reorg to branch B: %v", err)
+	}
+	if seed2 != seedBlockB.Hash() {
+		t.Fatalf("EpochManager did not invalidate stale seed after reorg: got %s, want %s", seed2.Hex(), seedBlockB.Hash().Hex())
+	}
+}

@@ -1,6 +1,7 @@
 package randomx
 
 import (
+	"bytes"
 	"fmt"
 	"sync"
 
@@ -9,10 +10,10 @@ import (
 )
 
 const (
-	// EpochLength is the number of blocks per RandomX epoch (2048 blocks, ~5.7 hours at 10s/block).
+	// EpochLength is the number of blocks per RandomX epoch (2048 blocks, ~17.07 hours at 30s/block).
 	EpochLength = uint64(2048)
 
-	// SeedLag is the number of blocks prior to epoch transition when the new seed is locked (64 blocks, ~10 minutes).
+	// SeedLag is the number of blocks prior to epoch transition when the new seed is locked (64 blocks, ~32 minutes at 30s/block).
 	SeedLag = uint64(64)
 
 	// CacheRetentionBlocks is the number of blocks to retain the previous epoch cache to handle chain reorgs.
@@ -74,51 +75,70 @@ func SeedBlockNumber(epoch uint64) uint64 {
 }
 
 // GetSeed retrieves or resolves the seed hash for the given epoch.
+// It cross-checks against the canonical header at SeedBlockNumber(epoch) so that if a
+// chain reorganization modifies the seed block, any stale cached context is invalidated.
 func (em *EpochManager) GetSeed(epoch uint64, chain consensus.ChainHeaderReader) (common.Hash, error) {
-	em.mu.RLock()
-	seed, exists := em.epochSeeds[epoch]
-	em.mu.RUnlock()
-	if exists {
-		return seed, nil
+	seedNum := SeedBlockNumber(epoch)
+	var headerHash common.Hash
+	if chain != nil {
+		if header := chain.GetHeaderByNumber(seedNum); header != nil {
+			headerHash = header.Hash()
+		}
 	}
 
-	seedNum := SeedBlockNumber(epoch)
-	header := chain.GetHeaderByNumber(seedNum)
-	if header == nil {
+	em.mu.RLock()
+	cachedSeed, exists := em.epochSeeds[epoch]
+	em.mu.RUnlock()
+
+	if exists && (headerHash == (common.Hash{}) || cachedSeed == headerHash) {
+		return cachedSeed, nil
+	}
+
+	if headerHash == (common.Hash{}) {
 		return common.Hash{}, fmt.Errorf("seed block %d not found for epoch %d", seedNum, epoch)
 	}
 
-	h := header.Hash()
 	em.mu.Lock()
-	em.epochSeeds[epoch] = h
+	if oldSeed, hadSeed := em.epochSeeds[epoch]; hadSeed && oldSeed != headerHash {
+		if oldCtx, hasCtx := em.contexts[epoch]; hasCtx {
+			oldCtx.Close()
+			delete(em.contexts, epoch)
+		}
+	}
+	em.epochSeeds[epoch] = headerHash
 	em.mu.Unlock()
-	return h, nil
+	return headerHash, nil
 }
 
 // GetContext returns the execution context for a given block number.
-// If the context does not exist, it initializes it (in Light Mode ~256MB or Fast Mode ~2GB).
+// If the context does not exist or its seed changed due to a reorg, it initializes it
+// (in Light Mode ~256MB or Fast Mode ~2.08GB).
 func (em *EpochManager) GetContext(blockNum uint64, chain consensus.ChainHeaderReader) (*RxContext, error) {
 	epoch := EpochNumber(blockNum)
-
-	em.mu.RLock()
-	ctx, exists := em.contexts[epoch]
-	targetFast := em.fastMode
-	em.mu.RUnlock()
-	if exists && ctx.fastMode == targetFast {
-		return ctx, nil
-	}
 
 	seed, err := em.GetSeed(epoch, chain)
 	if err != nil {
 		return nil, err
 	}
 
+	em.mu.RLock()
+	ctx, exists := em.contexts[epoch]
+	targetFast := em.fastMode
+	em.mu.RUnlock()
+	if exists && ctx.fastMode == targetFast && bytes.Equal(ctx.seed, seed.Bytes()) {
+		return ctx, nil
+	}
+
 	em.mu.Lock()
 	defer em.mu.Unlock()
 
 	// Double check under write lock
-	if ctx, exists = em.contexts[epoch]; exists && ctx.fastMode == em.fastMode {
+	if ctx, exists = em.contexts[epoch]; exists && ctx.fastMode == em.fastMode && bytes.Equal(ctx.seed, seed.Bytes()) {
 		return ctx, nil
+	}
+	if exists && ctx != nil {
+		ctx.Close()
+		delete(em.contexts, epoch)
 	}
 
 	newCtx, err := NewRxContext(seed.Bytes(), em.fastMode)

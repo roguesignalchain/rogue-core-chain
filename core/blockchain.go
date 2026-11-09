@@ -334,6 +334,11 @@ func NewBlockChain(db ethdb.Database, cacheConfig *CacheConfig, genesis *genesis
 	// Update chain info data metrics
 	chainInfoGauge.Update(metrics.GaugeInfoValue{"chain_id": bc.chainConfig.GetChainID().String()})
 
+	// Enable ECBP-1100 (MESS) artificial finality by default on Rogue Signal (RandomX)
+	if bc.chainConfig.GetConsensusEngineType() == ctypes.ConsensusEngineT_RandomX {
+		bc.EnableArtificialFinality(true, "reason", "rogue-signal default finality")
+	}
+
 	// If Geth is initialized with an external ancient store, re-initialize the
 	// missing chain indexes and chain flags. This procedure can survive crash
 	// and can be resumed in next restart since chain flags are updated in last step.
