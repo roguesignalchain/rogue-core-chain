@@ -10,8 +10,8 @@ import (
 )
 
 const (
-	// HalvingInterval is the number of blocks between reward halvings (2,100,000 blocks = ~2 years at 30s/block).
-	HalvingInterval = uint64(2100000)
+	// HalvingInterval is the number of blocks between reward halvings (2,000,000 blocks = ~1.90 years at 30s/block).
+	HalvingInterval = uint64(2000000)
 
 	// MaxHalvingEras is the maximum number of halving eras before block rewards become 0.
 	MaxHalvingEras = uint64(32)
@@ -30,11 +30,11 @@ var (
 	// WeiPerROGUE is 10^18 wei (1 ROGUE).
 	WeiPerROGUE = new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil)
 
-	// InitialBaseReward is 24 ROGUE in wei (22.8 ROGUE miner + 1.2 ROGUE treasury at 30s/block).
-	InitialBaseReward = new(big.Int).Mul(big.NewInt(24), WeiPerROGUE)
+	// InitialBaseReward is 25 ROGUE in wei (23.75 ROGUE miner + 1.25 ROGUE treasury at 30s/block).
+	InitialBaseReward = new(big.Int).Mul(big.NewInt(25), WeiPerROGUE)
 
-	// MaxSupplyCap is approximately 100,000,000 ROGUE in wei (exact theoretical total: 100,800,000 ROGUE).
-	MaxSupplyCap = new(big.Int).Mul(big.NewInt(100800000), WeiPerROGUE)
+	// MaxSupplyCap is 100,000,000 ROGUE in wei (25 * 2,000,000 * 2 = 100,000,000 ROGUE exact geometric limit).
+	MaxSupplyCap = new(big.Int).Mul(big.NewInt(100000000), WeiPerROGUE)
 
 	// DefaultTreasuryAddress is the default protocol treasury address for Rogue Signal.
 	DefaultTreasuryAddress = common.HexToAddress("0xe9aaE535B7971A9AC8C6af0e4B524D02260D3a03")
@@ -43,11 +43,11 @@ var (
 // CalculateBlockReward calculates the total block reward for a given block number.
 //
 // Rules:
-//   - Era 0 (blocks 1 .. 2,100,000): 24 ROGUE (24 * 10^18 wei)
-//   - Era 1 (blocks 2,100,001 .. 4,200,000): 12 ROGUE
-//   - Era 2 (blocks 4,200,001 .. 6,300,000): 6 ROGUE
-//   - Halves every 2,100,000 blocks (~2 years at 30s/block).
-//   - After era 32 (or if reward shifts to 0), returns 0 (Strict Cap).
+//   - Era 0 (blocks 1 .. 2,000,000): 25 ROGUE (25 * 10^18 wei)
+//   - Era 1 (blocks 2,000,001 .. 4,000,000): 12.5 ROGUE
+//   - Era 2 (blocks 4,000,001 .. 6,000,000): 6.25 ROGUE
+//   - Halves every 2,000,000 blocks (~1.90 years at 30s/block).
+//   - After era 32 (or if reward shifts to 0), returns 0 (Strict 100M Cap).
 func CalculateBlockReward(blockNumber uint64) *big.Int {
 	if blockNumber == 0 {
 		return big.NewInt(0) // Genesis block has 0 reward

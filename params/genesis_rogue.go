@@ -20,7 +20,7 @@ func DefaultRogueGenesisBlock() *genesisT.Genesis {
 		ExtraData:  []byte("ROGUE::800055 // THE_SILICON_BELONGS_TO_THE_MANY // 09.11.26"),
 		GasLimit:   60000000,
 		Difficulty: hexutil.MustDecodeBig("0x10000"), // Starting difficulty (65,536)
-		Timestamp:  1762711936,                       // Fixed launch epoch (Monday, Nov 9, 2026, 0x6910d980)
+		Timestamp:  1762711936,                       // Fixed launch epoch (Sunday, Nov 9, 2025, 0x6910d980)
 		Alloc:      make(genesisT.GenesisAlloc),      // 0% Premine - 100% Fair Launch
 	}
 }

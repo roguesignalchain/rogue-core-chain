@@ -163,11 +163,23 @@ func NewRxContext(seed []byte, fastMode bool) (*RxContext, error) {
 }
 
 func (ctx *RxContext) createVM() *VM {
-	var cVM *C.randomx_vm
-	if ctx.fastMode && ctx.dataset != nil {
-		cVM = C.randomx_create_vm(ctx.flags, nil, ctx.dataset.raw)
-	} else if ctx.cache != nil {
-		cVM = C.randomx_create_vm(ctx.flags, ctx.cache.raw, nil)
+	allocVM := func(flags C.randomx_flags) *C.randomx_vm {
+		if ctx.fastMode && ctx.dataset != nil {
+			return C.randomx_create_vm(flags, nil, ctx.dataset.raw)
+		} else if ctx.cache != nil {
+			return C.randomx_create_vm(flags, ctx.cache.raw, nil)
+		}
+		return nil
+	}
+
+	cVM := allocVM(ctx.flags)
+	// Fallback for W^X hardened kernels (macOS Hardened Runtime, strict SELinux/PaX):
+	// retry with RANDOMX_FLAG_SECURE, and finally fall back to interpreter mode if JIT is blocked.
+	if cVM == nil && (ctx.flags&C.RANDOMX_FLAG_JIT) != 0 {
+		cVM = allocVM(ctx.flags | C.RANDOMX_FLAG_SECURE)
+		if cVM == nil {
+			cVM = allocVM(ctx.flags &^ C.RANDOMX_FLAG_JIT)
+		}
 	}
 	if cVM == nil {
 		return nil

@@ -468,5 +468,27 @@ func TestRogueMaxReorgDepthFinality(t *testing.T) {
 	if allowedDeep {
 		t.Error("Expected deep reorg (depth 100 > MaxRogueReorgDepth 90) to be rejected")
 	}
+
+	// 3. Initial sync / long-offline recovery (extern.Time > current.Time + 24h and extern.Number > current.Number + 90) -> Allowed
+	forkSyncRecovery := forkDeep
+	for i := int64(106); i <= 200; i++ {
+		h := &types.Header{
+			ParentHash: forkSyncRecovery.Hash(),
+			Number:     big.NewInt(i),
+			Time:       canonHead.Time + MaxRogueSyncStaleAge + uint64(i*30),
+			Difficulty: big.NewInt(50000),
+			Extra:      []byte("canonical-network-sync"),
+		}
+		reader.headers[h.Hash()] = h
+		reader.tds[h.Hash()] = new(big.Int).Add(reader.tds[forkSyncRecovery.Hash()], h.Difficulty)
+		forkSyncRecovery = h
+	}
+	allowedSyncRecovery, err := fc.ReorgNeeded(canonHead, forkSyncRecovery)
+	if err != nil {
+		t.Fatalf("ReorgNeeded returned unexpected error on sync recovery: %v", err)
+	}
+	if !allowedSyncRecovery {
+		t.Error("Expected initial-sync/stale-head recovery (>24h and >90 blocks ahead) to be allowed")
+	}
 	_ = block50
 }

@@ -104,7 +104,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=${BIN_SRC} --rogue --datadir ${DATADIR} --http --http.addr 127.0.0.1 --http.port 38849 --http.api eth,net,web3,rogue --port 38890 --nat any --syncmode full --cache 512 ${EXTRA_ARGS}
+ExecStart=${BIN_SRC} --rogue --datadir ${DATADIR} --http --http.addr 127.0.0.1 --http.port 38849 --http.api eth,net,web3,randomx --port 38890 --nat any --syncmode full --cache 512 ${EXTRA_ARGS}
 Restart=always
 RestartSec=5s
 KillSignal=SIGTERM
@@ -125,6 +125,12 @@ else
         exit 1
     fi
 
+    SERVICE_USER="${SUDO_USER:-rogue}"
+    if ! id -u "${SERVICE_USER}" >/dev/null 2>&1; then
+        useradd --system --home-dir /var/lib/rogue-signal --create-home --shell /usr/sbin/nologin "${SERVICE_USER}"
+    fi
+    chown -R "${SERVICE_USER}:${SERVICE_USER}" "${DATADIR}"
+
     SERVICE_FILE="/etc/systemd/system/rogue-node.service"
     cat <<EOF > "${SERVICE_FILE}"
 [Unit]
@@ -134,8 +140,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=${SUDO_USER:-root}
-ExecStart=${BIN_SRC} --rogue --datadir ${DATADIR} --http --http.addr 127.0.0.1 --http.port 38849 --http.api eth,net,web3,rogue --port 38890 --nat any --syncmode full --cache 512 ${EXTRA_ARGS}
+User=${SERVICE_USER}
+ExecStart=${BIN_SRC} --rogue --datadir ${DATADIR} --http --http.addr 127.0.0.1 --http.port 38849 --http.api eth,net,web3,randomx --port 38890 --nat any --syncmode full --cache 512 ${EXTRA_ARGS}
 Restart=always
 RestartSec=5s
 LimitNOFILE=65535

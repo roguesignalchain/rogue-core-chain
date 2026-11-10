@@ -14,10 +14,12 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus"
+	"github.com/ethereum/go-ethereum/consensus/misc"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/metrics"
+	"github.com/ethereum/go-ethereum/params/vars"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/ethereum/go-ethereum/trie"
@@ -205,32 +207,61 @@ func (rx *RandomX) VerifyHeader(chain consensus.ChainHeaderReader, header *types
 }
 
 // verifyHeader performs full header validation given an already resolved parent header.
-// Phase 1 executes lightweight consensus rules in microseconds (ExtraData size, MTP-11 + 15s drift,
-// LWMA-1 difficulty, and GasLimit) before Phase 2 invokes the CPU-intensive RandomX CGo seal check.
+// Phase 1 executes lightweight consensus rules in microseconds (block number continuity, ExtraData size,
+// MTP-11 + 15s drift, LWMA-1 difficulty, GasLimit bounds, and disallowed optional header fields)
+// before Phase 2 invokes the CPU-intensive RandomX CGo seal check.
 func (rx *RandomX) verifyHeader(chain consensus.ChainHeaderReader, header, parent *types.Header, seal bool) error {
-	// 1. Verify ExtraData size limit (<= 64 bytes) to prevent header bloat attacks
+	// 1. Verify that the block number is parent's +1
+	if diff := new(big.Int).Sub(header.Number, parent.Number); diff.Cmp(big.NewInt(1)) != 0 {
+		return consensus.ErrInvalidNumber
+	}
+
+	// 2. Verify ExtraData size limit (<= 64 bytes) to prevent header bloat attacks
 	if len(header.Extra) > MaxExtraDataSize {
 		return fmt.Errorf("%w: have %d bytes, max %d bytes", ErrExtraDataTooLong, len(header.Extra), MaxExtraDataSize)
 	}
 
-	// 2. Verify strict timestamp rules (MTP-11 + max 15s future drift)
+	// 3. Verify strict timestamp rules (MTP-11 + max 15s future drift)
 	now := uint64(time.Now().Unix())
 	if err := VerifyHeaderTime(chain, header, parent, now); err != nil {
 		return err
 	}
 
-	// 3. Verify difficulty adjustment via LWMA-1
+	// 4. Verify difficulty adjustment via LWMA-1
 	expectedDifficulty := CalculateDifficulty(chain, header.Time, parent)
 	if header.Difficulty.Cmp(expectedDifficulty) != 0 {
 		return fmt.Errorf("invalid difficulty: have %v, want %v", header.Difficulty, expectedDifficulty)
 	}
 
-	// 4. Verify gas limit
+	// 5. Verify gas limit bounds and ±1/1024 adjustment delta relative to parent
+	if header.GasLimit > vars.MaxGasLimit {
+		return fmt.Errorf("invalid gasLimit: have %v, max %v", header.GasLimit, vars.MaxGasLimit)
+	}
 	if header.GasUsed > header.GasLimit {
 		return fmt.Errorf("gas used %d exceeds gas limit %d", header.GasUsed, header.GasLimit)
 	}
+	if err := misc.VerifyGaslimit(parent.GasLimit, header.GasLimit); err != nil {
+		return err
+	}
 
-	// 5. Verify seal if requested (Phase 2)
+	// 6. Reject optional header fields from inactive forks to prevent block-hash malleability
+	if header.BaseFee != nil {
+		return fmt.Errorf("invalid baseFee: have %v, expected nil", header.BaseFee)
+	}
+	if header.WithdrawalsHash != nil {
+		return fmt.Errorf("invalid withdrawalsHash: have %x, expected nil", *header.WithdrawalsHash)
+	}
+	if header.ExcessBlobGas != nil {
+		return fmt.Errorf("invalid excessBlobGas: have %d, expected nil", *header.ExcessBlobGas)
+	}
+	if header.BlobGasUsed != nil {
+		return fmt.Errorf("invalid blobGasUsed: have %d, expected nil", *header.BlobGasUsed)
+	}
+	if header.ParentBeaconRoot != nil {
+		return fmt.Errorf("invalid parentBeaconRoot: have %x, expected nil", *header.ParentBeaconRoot)
+	}
+
+	// 7. Verify seal if requested (Phase 2)
 	if seal {
 		if err := rx.VerifySeal(chain, header); err != nil {
 			return err
@@ -434,6 +465,18 @@ func (rx *RandomX) SealHash(header *types.Header) common.Hash {
 	if header.BaseFee != nil {
 		enc = append(enc, header.BaseFee)
 	}
+	if header.WithdrawalsHash != nil {
+		enc = append(enc, header.WithdrawalsHash)
+	}
+	if header.BlobGasUsed != nil {
+		enc = append(enc, header.BlobGasUsed)
+	}
+	if header.ExcessBlobGas != nil {
+		enc = append(enc, header.ExcessBlobGas)
+	}
+	if header.ParentBeaconRoot != nil {
+		enc = append(enc, header.ParentBeaconRoot)
+	}
 
 	rlp.Encode(hasher, enc)
 	var hash common.Hash
@@ -463,7 +506,7 @@ func (rx *RandomX) VerifySeal(chain consensus.ChainHeaderReader, header *types.H
 		return nil // Genesis
 	}
 
-	ctx, err := rx.epochs.GetContext(number, chain)
+	ctx, err := rx.epochs.GetContextForHeader(header, chain)
 	if err != nil {
 		return fmt.Errorf("failed to get RandomX context for block %d: %w", number, err)
 	}
@@ -505,7 +548,7 @@ func (rx *RandomX) Seal(chain consensus.ChainHeaderReader, block *types.Block, r
 		return nil
 	}
 
-	ctx, err := rx.epochs.GetContext(number, chain)
+	ctx, err := rx.epochs.GetContextForHeader(header, chain)
 	if err != nil {
 		return fmt.Errorf("failed to get RandomX context for mining block %d: %w", number, err)
 	}
@@ -554,6 +597,7 @@ func (rx *RandomX) Seal(chain consensus.ChainHeaderReader, block *types.Block, r
 					rxHash, err := ctx.CalculateHash(input)
 					if err != nil {
 						rx.markAttempts(attempts)
+						log.Debug("RandomX seal worker stopped due to context error", "tid", tid, "number", number, "err", err)
 						return
 					}
 
@@ -625,12 +669,12 @@ func (rx *RandomX) Hashrate() float64 {
 	return localRate
 }
 
-// APIs returns consensus RPC APIs for eth and randomx namespaces.
+// APIs returns consensus RPC APIs for eth (read-only/stubs) and randomx (diagnostics/controls) namespaces.
 func (rx *RandomX) APIs(chain consensus.ChainHeaderReader) []rpc.API {
 	return []rpc.API{
 		{
 			Namespace: "eth",
-			Service:   &API{rx: rx, chain: chain},
+			Service:   &EthAPI{rx: rx},
 		},
 		{
 			Namespace: "randomx",

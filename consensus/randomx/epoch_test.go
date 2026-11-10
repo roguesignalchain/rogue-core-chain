@@ -116,3 +116,81 @@ func TestEpochSeedReorgInvalidation(t *testing.T) {
 		t.Fatalf("EpochManager did not invalidate stale seed after reorg: got %s, want %s", seed2.Hex(), seedBlockB.Hash().Hex())
 	}
 }
+
+func TestSideForkEpochSeedResolution(t *testing.T) {
+	chain := NewFakeChainReader()
+
+	// Canonical branch A from block 1983 -> 2048
+	commonAncestor := &types.Header{
+		Number: big.NewInt(1983),
+		Time:   10000,
+	}
+	chain.AddHeader(commonAncestor)
+
+	currA := commonAncestor
+	var seedA *types.Header
+	for n := int64(1984); n <= 2048; n++ {
+		h := &types.Header{
+			ParentHash: currA.Hash(),
+			Number:     big.NewInt(n),
+			Time:       currA.Time + 30,
+			Extra:      []byte("canonical-branch-A"),
+		}
+		chain.AddHeader(h)
+		if n == 1984 {
+			seedA = h
+		}
+		currA = h
+	}
+
+	// Side fork B diverges at block 1984 (the epoch 1 seed block) and extends to block 2048.
+	// We store fork B headers in a map by hash while GetHeaderByNumber still returns canonical branch A.
+	sideHeaders := make(map[uint64]*types.Header)
+	currB := commonAncestor
+	var seedB *types.Header
+	for n := int64(1984); n <= 2048; n++ {
+		h := &types.Header{
+			ParentHash: currB.Hash(),
+			Number:     big.NewInt(n),
+			Time:       currB.Time + 29,
+			Extra:      []byte("competing-fork-B"),
+		}
+		chain.headers[h.Hash()] = h
+		sideHeaders[uint64(n)] = h
+		if n == 1984 {
+			seedB = h
+		}
+		currB = h
+	}
+
+	// Ensure GetHeaderByNumber(1984) returns canonical seedA:
+	reader := &headerChainReader{
+		ChainHeaderReader: chain,
+		byHash:            chain.headers,
+		byNumber: map[uint64]*types.Header{
+			1983: commonAncestor,
+			1984: seedA,
+		},
+	}
+
+	em := NewEpochManager(false)
+	defer em.Close()
+
+	// Canonical block 2048 must resolve seedA
+	resolvedA, err := em.ResolveSeedForHeader(currA, reader)
+	if err != nil {
+		t.Fatalf("ResolveSeedForHeader failed for canonical branch A: %v", err)
+	}
+	if resolvedA != seedA.Hash() {
+		t.Fatalf("Expected canonical seed %s, got %s", seedA.Hash().Hex(), resolvedA.Hex())
+	}
+
+	// Side-fork block 2048 must resolve seedB by walking its own parent chain back to 1984
+	resolvedB, err := em.ResolveSeedForHeader(sideHeaders[2048], reader)
+	if err != nil {
+		t.Fatalf("ResolveSeedForHeader failed for side fork B: %v", err)
+	}
+	if resolvedB != seedB.Hash() {
+		t.Fatalf("Expected side-fork seed %s, got %s", seedB.Hash().Hex(), resolvedB.Hex())
+	}
+}

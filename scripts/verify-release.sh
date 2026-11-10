@@ -51,16 +51,32 @@ if [ -d "${WORKSPACE_ROOT}/rogue-desktop-client" ]; then
     fi
 fi
 
-# 4. Check git status across repositories
-echo "4. Checking git working tree cleanliness..."
+# 4. Check git status across repositories and scan for secret leaks
+echo "4. Checking git working tree cleanliness and secret absence..."
 if [ -d "${CORE_DIR}/.git" ]; then
     echo "-> Status in rogue-core-chain:"
-    git -C "${CORE_DIR}" status --short
+    DIRTY_CORE="$(git -C "${CORE_DIR}" status --porcelain)"
+    if [ -n "${DIRTY_CORE}" ]; then
+        echo "${DIRTY_CORE}"
+        echo "ERROR: Working tree in rogue-core-chain is not clean. Commit or stash changes before release."
+        exit 1
+    fi
+    LEAK_CORE="$(git -C "${CORE_DIR}" grep -I -E 'BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY' -- . ':!scripts/verify-release.sh' ':!*_test.go' ':!tests/*' ':!crypto/*' ':!p2p/*' ':!accounts/*' ':!cmd/*' ':!internal/*' || true)"
+    if [ -n "${LEAK_CORE}" ]; then
+        echo "SECURITY ERROR: Potential private key header detected in rogue-core-chain:"
+        echo "${LEAK_CORE}"
+        exit 1
+    fi
 fi
 
 if [ -d "${WORKSPACE_ROOT}/rogue-desktop-client/.git" ]; then
     echo "-> Status in rogue-desktop-client:"
-    git -C "${WORKSPACE_ROOT}/rogue-desktop-client" status --short
+    DIRTY_DESKTOP="$(git -C "${WORKSPACE_ROOT}/rogue-desktop-client" status --porcelain)"
+    if [ -n "${DIRTY_DESKTOP}" ]; then
+        echo "${DIRTY_DESKTOP}"
+        echo "ERROR: Working tree in rogue-desktop-client is not clean. Commit or stash changes before release."
+        exit 1
+    fi
 fi
 
 echo "=== Pre-release checklist PASSED! ==="

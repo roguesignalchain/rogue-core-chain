@@ -13,7 +13,34 @@ import (
 // Rogue Signal restricts mining strictly to the internal node CPU engine to prevent external Stratum proxies and specialized rigs.
 var ErrRemoteMiningDisabled = errors.New("remote mining (eth_getWork / eth_submitWork) is disabled on Rogue Signal: only internal node CPU mining is supported")
 
-// API exposes RandomX consensus methods for the RPC interface (eth and randomx namespaces).
+// EthAPI exposes only standard read-only/stub PoW methods on the public "eth" namespace.
+// Administrative node controls such as SetFastMode are intentionally excluded from "eth"
+// to prevent unauthenticated memory-allocation DoS on public RPC endpoints.
+type EthAPI struct {
+	rx *RandomX
+}
+
+// GetWork is disabled on Rogue Signal to prevent external Stratum bridges and mining rigs.
+func (api *EthAPI) GetWork() ([4]string, error) {
+	return [4]string{}, ErrRemoteMiningDisabled
+}
+
+// SubmitWork is disabled on Rogue Signal to prevent external Stratum bridges and mining rigs.
+func (api *EthAPI) SubmitWork(nonce types.BlockNonce, hash, digest common.Hash) bool {
+	return false
+}
+
+// SubmitHashrate is disabled on Rogue Signal as external miners are not supported.
+func (api *EthAPI) SubmitHashrate(rate hexutil.Uint64, id common.Hash) bool {
+	return false
+}
+
+// GetHashrate returns the current hashrate of the internal local CPU miner.
+func (api *EthAPI) GetHashrate() uint64 {
+	return uint64(api.rx.Hashrate())
+}
+
+// API exposes RandomX consensus diagnostic and control methods under the "randomx" namespace.
 type API struct {
 	rx    *RandomX
 	chain consensus.ChainHeaderReader

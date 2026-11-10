@@ -93,21 +93,18 @@ func CalculateDifficulty(chain consensus.ChainHeaderReader, time uint64, parent 
 		return new(big.Int).Set(MinDifficulty)
 	}
 
-	blockNum := parent.Number.Uint64() + 1
-	if blockNum == 0 {
-		return new(big.Int).Set(MinDifficulty)
+	parentNum := parent.Number.Uint64()
+	if parentNum == 0 {
+		return new(big.Int).Set(parent.Difficulty)
 	}
 
 	targetTime := uint64(DefaultTargetBlockTime)
 	window := uint64(DefaultLWMAWindow)
 
-	// Determine effective history window k
+	// Determine effective history window k (number of solve intervals available back to Genesis)
 	k := window
-	if blockNum <= window {
-		k = blockNum
-	}
-	if k < 1 {
-		k = 1
+	if parentNum < window {
+		k = parentNum
 	}
 
 	// Fetch headers from parent back k blocks
@@ -125,21 +122,25 @@ func CalculateDifficulty(chain consensus.ChainHeaderReader, time uint64, parent 
 		curr = p
 	}
 
-	// Calculate weighted solve times and average target over the window
+	// Calculate weighted solve times and average target over the window using monotonic timestamps
+	// to prevent out-of-order timestamp oscillation attacks under MTP-11.
 	var (
 		sumTarget     = new(big.Int)
 		weightedTimes = int64(0)
 		sumSolveTimes = int64(0)
+		prevTime      = int64(headers[0].Time)
 	)
 
 	for i := uint64(1); i <= k; i++ {
 		hCurr := headers[i]
-		hPrev := headers[i-1]
 
-		solvetime := int64(hCurr.Time) - int64(hPrev.Time)
-		if solvetime < 1 {
-			solvetime = 1
+		currTime := int64(hCurr.Time)
+		if currTime <= prevTime {
+			currTime = prevTime + 1
 		}
+		solvetime := currTime - prevTime
+		prevTime = currTime
+
 		// Cap extreme solvetimes to prevent malicious manipulation (max 6 * targetTime)
 		if solvetime > int64(6*targetTime) {
 			solvetime = int64(6 * targetTime)

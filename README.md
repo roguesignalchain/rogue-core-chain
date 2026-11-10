@@ -57,9 +57,9 @@
 | **Timestamp Rules** | **Strict MTP-11** | Block time must exceed Past Median Time of past 11 blocks; max 15s future drift |
 | **Anti-51% Finality** | **`MaxReorgDepth = 90` + MESS** | 90-block hard rolling finality (~45m) + ECBP-1100 polynomial gravity (up to $31\times$ TD) |
 | **Header Limits** | **`MaxExtraDataSize = 64` bytes** | Anti-bloat cap + two-phase fail-fast parallel `VerifyHeaders` |
-| **Total Max Supply** | **100,000,000 ROGUE** | Mathematical hard cap across 32 halving eras (zero tail emission) |
-| **Initial Block Reward**| **24 ROGUE** | Halves every 2,100,000 blocks (~2 years at 30s/block) |
-| **Reward Split** | **95% Miner / 5% Treasury** | 22.8 ROGUE to miner coinbase (+ 100% tx fees), 1.2 ROGUE to protocol treasury |
+| **Total Max Supply** | **100,000,000 ROGUE** | Exact mathematical hard cap across 32 halving eras (zero tail emission) |
+| **Initial Block Reward**| **25 ROGUE** | Halves every 2,000,000 blocks (~1.90 years at 30s/block) |
+| **Reward Split** | **95% Miner / 5% Treasury** | 23.75 ROGUE to miner coinbase (+ 100% tx fees), 1.25 ROGUE to protocol treasury |
 | **Treasury Address** | `0xe9aaE535B7971A9AC8C6af0e4B524D02260D3a03` | Hardcoded default fallback; configurable in `genesis.json` |
 | **Uncle Blocks** | **Strictly Forbidden (0%)** | Uncle headers rejected (`ErrUnclesNotAllowed`), simplifying state tree |
 | **Seed Rotation** | **Every 2048 blocks (~17.07h)** | Rotates RandomX VM key every 2048 blocks with canonical reorg validation |
@@ -80,15 +80,15 @@
 
 Rogue Signal implements a strictly disinflationary emission model inspired by Bitcoin, calibrated for a 30-second block cadence:
 
-$$\text{Era} = \left\lfloor \frac{\text{BlockNumber} - 1}{2,100,000} \right\rfloor$$
-$$\text{Reward} = \left\lfloor \frac{24 \times 10^{18}}{2^{\text{Era}}} \right\rfloor \text{ wei}$$
+$$\text{Era} = \left\lfloor \frac{\text{BlockNumber} - 1}{2,000,000} \right\rfloor$$
+$$\text{Reward} = \left\lfloor \frac{25 \times 10^{18}}{2^{\text{Era}}} \right\rfloor \text{ wei}$$
 
-* **Era 0 (Blocks 1 – 2,100,000 / ~Years 0–2)**: 24 ROGUE per block (22.8 ROGUE miner / 1.2 ROGUE treasury). **50,400,000 ROGUE minted**.
-* **Era 1 (Blocks 2,100,001 – 4,200,000 / ~Years 2–4)**: 12 ROGUE per block (11.4 ROGUE miner / 0.6 ROGUE treasury). **25,200,000 ROGUE minted**.
-* **Era 2 (Blocks 4,200,001 – 6,300,000 / ~Years 4–6)**: 6 ROGUE per block (5.7 ROGUE miner / 0.3 ROGUE treasury). **12,600,000 ROGUE minted**.
-* **Era 3 (Blocks 6,300,001 – 8,400,000 / ~Years 6–8)**: 3 ROGUE per block (2.85 ROGUE miner / 0.15 ROGUE treasury). **6,300,000 ROGUE minted**.
-* **Eras 4 – 31**: Exponential reduction halving every 2.1M blocks.
-* **Era 32+**: **0 ROGUE (Absolute Zero)**. After 100M ROGUE are minted, the block subsidy is permanently terminated. Miners are sustained 100% by transaction gas fees.
+* **Era 0 (Blocks 1 – 2,000,000 / ~Years 0–1.9)**: 25 ROGUE per block (23.75 ROGUE miner / 1.25 ROGUE treasury). **50,000,000 ROGUE minted**.
+* **Era 1 (Blocks 2,000,001 – 4,000,000 / ~Years 1.9–3.8)**: 12.5 ROGUE per block (11.875 ROGUE miner / 0.625 ROGUE treasury). **25,000,000 ROGUE minted**.
+* **Era 2 (Blocks 4,000,001 – 6,000,000 / ~Years 3.8–5.7)**: 6.25 ROGUE per block (5.9375 ROGUE miner / 0.3125 ROGUE treasury). **12,500,000 ROGUE minted**.
+* **Era 3 (Blocks 6,000,001 – 8,000,000 / ~Years 5.7–7.6)**: 3.125 ROGUE per block (2.96875 ROGUE miner / 0.15625 ROGUE treasury). **6,250,000 ROGUE minted**.
+* **Eras 4 – 31**: Exponential reduction halving every 2.0M blocks.
+* **Era 32+**: **0 ROGUE (Absolute Zero)**. After 100M ROGUE are minted ($25 \times 2,000,000 \times 2 = 100,000,000$), the block subsidy is permanently terminated. Miners are sustained 100% by transaction gas fees.
 
 ---
 
@@ -111,7 +111,7 @@ $$\text{Reward} = \left\lfloor \frac{24 \times 10^{18}}{2^{\text{Era}}} \right\r
 │                   consensus/randomx (Engine Interface)                 │
 │                                                                        │
 │  ├── difficulty.go : LWMA-1 (N=60, T=30s, clamp +-33%, MTP-11)         │
-│  ├── rewards.go    : 24 ROGUE base, 2.1M halving, 95%/5% split, 100M   │
+│  ├── rewards.go    : 25 ROGUE base, 2.0M halving, 95%/5% split, 100M   │
 │  ├── epoch.go      : 2048-block epoch manager, 64-block lag, reorg safe│
 │  ├── randomx.go    : SealHash, 2-phase VerifyHeaders, MaxExtraData 64B │
 │  └── rx_cgo.go     : CGO bindings to librandomx.a (UAF-safe RLock)     │

@@ -2589,6 +2589,7 @@ func MakeChain(ctx *cli.Context, stack *node.Node, readonly bool) (*core.BlockCh
 		randomxConfig = &randomx.Config{
 			FastMode: ctx.Bool(RandomXFastFlag.Name),
 			Threads:  ctx.Int(MinerThreadsFlag.Name),
+			Treasury: params.RogueTreasuryAddress,
 		}
 	}
 

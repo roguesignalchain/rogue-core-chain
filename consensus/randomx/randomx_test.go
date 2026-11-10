@@ -141,6 +141,7 @@ func TestVerifyHeadersBatch(t *testing.T) {
 		Number:     big.NewInt(0),
 		Time:       now - 120,
 		Difficulty: big.NewInt(0x10000),
+		GasLimit:   60000000,
 	}
 	chain.AddHeader(genesis)
 
@@ -201,6 +202,7 @@ func TestExtraDataLimitValidation(t *testing.T) {
 		Number:     big.NewInt(0),
 		Time:       now - 60,
 		Difficulty: big.NewInt(0x10000),
+		GasLimit:   60000000,
 	}
 	chain.AddHeader(genesis)
 
@@ -304,8 +306,8 @@ func TestConsensusStatusAndEpochInfoAPI(t *testing.T) {
 	if status.MaxExtraDataSize != 64 {
 		t.Errorf("Expected MaxExtraDataSize 64, got %d", status.MaxExtraDataSize)
 	}
-	if status.HalvingInterval != 2100000 {
-		t.Errorf("Expected HalvingInterval 2100000, got %d", status.HalvingInterval)
+	if status.HalvingInterval != 2000000 {
+		t.Errorf("Expected HalvingInterval 2000000, got %d", status.HalvingInterval)
 	}
 	if !status.MESSActive {
 		t.Error("Expected MESSActive to be true")
@@ -360,21 +362,132 @@ func TestRemoteMiningDisabled(t *testing.T) {
 	defer rx.Close()
 
 	apis := rx.APIs(chain)
-	if len(apis) == 0 {
-		t.Fatal("Expected non-empty APIs")
+	if len(apis) < 2 {
+		t.Fatal("Expected both eth and randomx APIs")
 	}
 
-	api := apis[0].Service.(*API)
+	ethAPI, ok := apis[0].Service.(*EthAPI)
+	if !ok {
+		t.Fatalf("Expected EthAPI on eth namespace, got %T", apis[0].Service)
+	}
 
-	if _, err := api.GetWork(); err != ErrRemoteMiningDisabled {
+	if _, err := ethAPI.GetWork(); err != ErrRemoteMiningDisabled {
 		t.Errorf("Expected ErrRemoteMiningDisabled from GetWork, got %v", err)
 	}
 
-	if api.SubmitWork(types.EncodeNonce(1), common.Hash{}, common.Hash{}) {
+	if ethAPI.SubmitWork(types.EncodeNonce(1), common.Hash{}, common.Hash{}) {
 		t.Error("Expected SubmitWork to return false when remote mining is disabled")
 	}
 
-	if api.SubmitHashrate(1000, common.Hash{}) {
+	if ethAPI.SubmitHashrate(1000, common.Hash{}) {
 		t.Error("Expected SubmitHashrate to return false when remote mining is disabled")
+	}
+
+	rxAPI, ok := apis[1].Service.(*API)
+	if !ok {
+		t.Fatalf("Expected API on randomx namespace, got %T", apis[1].Service)
+	}
+	if _, err := rxAPI.GetWork(); err != ErrRemoteMiningDisabled {
+		t.Errorf("Expected ErrRemoteMiningDisabled from randomx GetWork, got %v", err)
+	}
+}
+
+func TestGasLimitValidation(t *testing.T) {
+	chain := NewFakeChainReader()
+	now := uint64(time.Now().Unix())
+
+	genesis := &types.Header{
+		Number:     big.NewInt(0),
+		Time:       now - 60,
+		Difficulty: big.NewInt(0x10000),
+		GasLimit:   60000000,
+	}
+	chain.AddHeader(genesis)
+
+	rx := New(Config{FastMode: false, Threads: 1})
+	defer rx.Close()
+
+	// 1. Jumping gasLimit by 2x parent must be rejected by misc.VerifyGaslimit
+	hJump := &types.Header{
+		ParentHash: genesis.Hash(),
+		Number:     big.NewInt(1),
+		Time:       now,
+		GasLimit:   120000000,
+	}
+	hJump.Difficulty = CalculateDifficulty(chain, hJump.Time, genesis)
+	if err := rx.VerifyHeader(chain, hJump, false); err == nil {
+		t.Fatal("Expected header with 2x parent GasLimit jump to be rejected")
+	}
+
+	// 2. GasLimit within ±1/1024 delta must be accepted
+	hValid := &types.Header{
+		ParentHash: genesis.Hash(),
+		Number:     big.NewInt(1),
+		Time:       now,
+		GasLimit:   60000000 + (60000000/1024 - 1),
+	}
+	hValid.Difficulty = CalculateDifficulty(chain, hValid.Time, genesis)
+	if err := rx.VerifyHeader(chain, hValid, false); err != nil {
+		t.Fatalf("Expected valid GasLimit adjustment to pass, got: %v", err)
+	}
+}
+
+func TestDisallowedOptionalHeaderFields(t *testing.T) {
+	chain := NewFakeChainReader()
+	now := uint64(time.Now().Unix())
+
+	genesis := &types.Header{
+		Number:     big.NewInt(0),
+		Time:       now - 60,
+		Difficulty: big.NewInt(0x10000),
+		GasLimit:   60000000,
+	}
+	chain.AddHeader(genesis)
+
+	rx := New(Config{FastMode: false, Threads: 1})
+	defer rx.Close()
+
+	makeBase := func() *types.Header {
+		h := &types.Header{
+			ParentHash: genesis.Hash(),
+			Number:     big.NewInt(1),
+			Time:       now,
+			GasLimit:   60000000,
+		}
+		h.Difficulty = CalculateDifficulty(chain, h.Time, genesis)
+		return h
+	}
+
+	// Verify BaseFee rejection
+	hBaseFee := makeBase()
+	hBaseFee.BaseFee = big.NewInt(1000000000)
+	if err := rx.VerifyHeader(chain, hBaseFee, false); err == nil {
+		t.Fatal("Expected non-nil BaseFee to be rejected")
+	}
+
+	// Verify WithdrawalsHash rejection and SealHash commitment
+	hWithdrawals := makeBase()
+	emptyRoot := types.EmptyRootHash
+	hWithdrawals.WithdrawalsHash = &emptyRoot
+	if err := rx.VerifyHeader(chain, hWithdrawals, false); err == nil {
+		t.Fatal("Expected non-nil WithdrawalsHash to be rejected")
+	}
+	if rx.SealHash(makeBase()) == rx.SealHash(hWithdrawals) {
+		t.Fatal("Expected SealHash to commit to WithdrawalsHash")
+	}
+
+	// Verify ExcessBlobGas and BlobGasUsed rejection
+	zero := uint64(0)
+	hBlob := makeBase()
+	hBlob.ExcessBlobGas = &zero
+	if err := rx.VerifyHeader(chain, hBlob, false); err == nil {
+		t.Fatal("Expected non-nil ExcessBlobGas to be rejected")
+	}
+
+	// Verify ParentBeaconRoot rejection
+	hBeacon := makeBase()
+	hBeacon.ParentBeaconRoot = &emptyRoot
+	if err := rx.VerifyHeader(chain, hBeacon, false); err == nil {
+		t.Fatal("Expected non-nil ParentBeaconRoot to be rejected")
 	}
 }

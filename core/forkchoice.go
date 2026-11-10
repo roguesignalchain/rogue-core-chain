@@ -35,6 +35,12 @@ import (
 // MaxRogueReorgDepth is the maximum allowed chain reorganization depth on Rogue Signal (90 blocks = ~45 minutes at 30s/block).
 const MaxRogueReorgDepth = uint64(90)
 
+// MaxRogueSyncStaleAge is the age threshold (24 hours) beyond which a stalled local head
+// during initial sync or long offline recovery is permitted to reorg onto the canonical chain.
+// Because VerifyHeaderTime strictly forbids timestamps >15s in the future, a live 51% attacker
+// can never satisfy extern.Time > current.Time + MaxRogueSyncStaleAge against an active node.
+const MaxRogueSyncStaleAge = uint64(24 * 60 * 60)
+
 // ForkChoice is the fork chooser based on the highest total difficulty of the
 // chain(the fork choice used in the eth1) and the external fork choice (the fork
 // choice used in the eth2). This main goal of this ForkChoice is not only for
@@ -168,7 +174,9 @@ func (f *ForkChoice) ReorgNeeded(current *types.Header, extern *types.Header) (b
 		}
 		if current.Number.Uint64() > commonHeader.Number.Uint64() {
 			reorgDepth := current.Number.Uint64() - commonHeader.Number.Uint64()
-			if reorgDepth > MaxRogueReorgDepth {
+			isInitialSyncRecovery := extern.Time > current.Time+MaxRogueSyncStaleAge &&
+				extern.Number.Uint64() > current.Number.Uint64()+MaxRogueReorgDepth
+			if reorgDepth > MaxRogueReorgDepth && !isInitialSyncRecovery {
 				log.Warn("Reorg rejected: exceeds MaxReorgDepth finality threshold",
 					"depth", reorgDepth,
 					"maxAllowed", MaxRogueReorgDepth,

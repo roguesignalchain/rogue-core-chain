@@ -21,10 +21,10 @@ Antes de iniciar cualquier proceso, se verificó el estado del entorno:
 | **Algoritmo PoW** | `RandomX` (`rx/0`) | Minería resistente a ASICs/GPUs exclusiva para CPU casera |
 | **Modo de Memoria** | `Light Mode (~256 MB)` | Por defecto siempre; opción `Fast Mode (~2.08 GB)` |
 | **Tiempo de Bloque** | 30 segundos | Frecuencia objetivo de emisión con `< 0.5%` de bloques huérfanos |
-| **Emisión por Bloque** | 24 ROGUE | Halving cada 2,100,000 bloques (~2 años) |
-| **Reparto de Minado** | 95% Minero / 5% Tesorería | 22.8 ROGUE al minero (+ 100% comisiones), 1.2 ROGUE a la tesorería |
+| **Emisión por Bloque** | 25 ROGUE | Halving cada 2,000,000 bloques (~1.90 años) |
+| **Reparto de Minado** | 95% Minero / 5% Tesorería | 23.75 ROGUE al minero (+ 100% comisiones), 1.25 ROGUE a la tesorería |
 | **Billetera Tesorería**| `0xe9aaE535B7971A9AC8C6af0e4B524D02260D3a03` | Recibe el 5% en cada bloque |
-| **Suministro Máximo** | 100,000,000 ROGUE | Hard cap estricto (100.8M en 32 eras), sin emisión de cola |
+| **Suministro Máximo** | 100,000,000 ROGUE | Hard cap matemático exacto en 32 eras ($25 \times 2\text{M} \times 2$), sin emisión de cola |
 | **Dificultad (DAA)** | LWMA-1 ($N=60$) | Ajuste lineal ponderado por bloque (~30 min, $\pm 33\%$ clamp) |
 | **Reglas de Tiempo** | MTP-11 estricto | Límite de desvío futuro de 15 segundos |
 | **Finalidad Anti-51%** | `MaxReorgDepth = 90` + MESS | Límite duro de 90 bloques (~45m) + gravedad polinómica ECBP-1100 |

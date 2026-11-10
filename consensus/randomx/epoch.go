@@ -1,12 +1,12 @@
 package randomx
 
 import (
-	"bytes"
 	"fmt"
 	"sync"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus"
+	"github.com/ethereum/go-ethereum/core/types"
 )
 
 const (
@@ -20,24 +20,43 @@ const (
 	CacheRetentionBlocks = uint64(128)
 )
 
-// EpochManager coordinates RandomX cache/dataset lifecycle across epochs with precomputation and reorg support.
+type inflightKey struct {
+	seed     common.Hash
+	fastMode bool
+}
+
+type seedInit struct {
+	done chan struct{}
+	ctx  *RxContext
+	err  error
+}
+
+// EpochManager coordinates RandomX cache/dataset lifecycle across epochs with precomputation and reorg/fork support.
 type EpochManager struct {
 	fastMode bool
 	mu       sync.RWMutex
 
-	// activeContexts caches RxContext by epoch number
-	contexts map[uint64]*RxContext
+	// contexts caches RxContext by 32-byte seed hash so competing forks at epoch boundaries do not thrash each other.
+	contexts map[common.Hash]*RxContext
 
-	// epochSeeds maps epoch number to 32-byte seed
+	// contextEpochs tracks the highest epoch number associated with each cached seed for eviction.
+	contextEpochs map[common.Hash]uint64
+
+	// epochSeeds maps epoch number to the most recently resolved canonical 32-byte seed.
 	epochSeeds map[uint64]common.Hash
+
+	// inflight deduplicates concurrent context allocations without holding the global lock during CGo allocation.
+	inflight map[inflightKey]*seedInit
 }
 
 // NewEpochManager creates a new epoch coordinator.
 func NewEpochManager(fastMode bool) *EpochManager {
 	return &EpochManager{
-		fastMode:   fastMode,
-		contexts:   make(map[uint64]*RxContext),
-		epochSeeds: make(map[uint64]common.Hash),
+		fastMode:      fastMode,
+		contexts:      make(map[common.Hash]*RxContext),
+		contextEpochs: make(map[common.Hash]uint64),
+		epochSeeds:    make(map[uint64]common.Hash),
+		inflight:      make(map[inflightKey]*seedInit),
 	}
 }
 
@@ -74,9 +93,9 @@ func SeedBlockNumber(epoch uint64) uint64 {
 	return target - SeedLag
 }
 
-// GetSeed retrieves or resolves the seed hash for the given epoch.
+// GetSeed retrieves or resolves the canonical seed hash for the given epoch.
 // It cross-checks against the canonical header at SeedBlockNumber(epoch) so that if a
-// chain reorganization modifies the seed block, any stale cached context is invalidated.
+// chain reorganization modifies the seed block, any stale cached seed mapping is updated.
 func (em *EpochManager) GetSeed(epoch uint64, chain consensus.ChainHeaderReader) (common.Hash, error) {
 	seedNum := SeedBlockNumber(epoch)
 	var headerHash common.Hash
@@ -100,9 +119,10 @@ func (em *EpochManager) GetSeed(epoch uint64, chain consensus.ChainHeaderReader)
 
 	em.mu.Lock()
 	if oldSeed, hadSeed := em.epochSeeds[epoch]; hadSeed && oldSeed != headerHash {
-		if oldCtx, hasCtx := em.contexts[epoch]; hasCtx {
+		if oldCtx, hasCtx := em.contexts[oldSeed]; hasCtx {
 			oldCtx.Close()
-			delete(em.contexts, epoch)
+			delete(em.contexts, oldSeed)
+			delete(em.contextEpochs, oldSeed)
 		}
 	}
 	em.epochSeeds[epoch] = headerHash
@@ -110,51 +130,133 @@ func (em *EpochManager) GetSeed(epoch uint64, chain consensus.ChainHeaderReader)
 	return headerHash, nil
 }
 
-// GetContext returns the execution context for a given block number.
-// If the context does not exist or its seed changed due to a reorg, it initializes it
-// (in Light Mode ~256MB or Fast Mode ~2.08GB).
+// ResolveSeedForHeader resolves the exact RandomX seed hash for a specific header by following
+// its ancestor chain when the seed block is within reorganization range (MaxReorgDepth + SeedLag).
+// Once a block is deeper than MaxReorgDepth + SeedLag past the seed block, the seed block is
+// finalized and resolved in O(1) via GetSeed.
+func (em *EpochManager) ResolveSeedForHeader(header *types.Header, chain consensus.ChainHeaderReader) (common.Hash, error) {
+	if header == nil {
+		return common.Hash{}, fmt.Errorf("nil header")
+	}
+	blockNum := header.Number.Uint64()
+	epoch := EpochNumber(blockNum)
+	seedNum := SeedBlockNumber(epoch)
+
+	if seedNum == 0 || chain == nil {
+		return em.GetSeed(epoch, chain)
+	}
+
+	if blockNum == seedNum {
+		return header.Hash(), nil
+	}
+
+	// Within MaxReorgDepth + SeedLag (154 blocks) of seedNum, walk parent hashes directly to seedNum
+	// so side-fork blocks across epoch boundaries always use their own branch's seed block.
+	if blockNum > seedNum && (blockNum-seedNum) <= (MaxReorgDepth+SeedLag) {
+		currHash := header.ParentHash
+		currNum := blockNum - 1
+		for currNum >= seedNum {
+			curr := chain.GetHeader(currHash, currNum)
+			if curr == nil {
+				break
+			}
+			if currNum == seedNum {
+				return curr.Hash(), nil
+			}
+			if currNum == 0 {
+				break
+			}
+			currHash = curr.ParentHash
+			currNum--
+		}
+	}
+
+	return em.GetSeed(epoch, chain)
+}
+
+// GetContext returns the execution context for a given block number on the canonical chain.
 func (em *EpochManager) GetContext(blockNum uint64, chain consensus.ChainHeaderReader) (*RxContext, error) {
 	epoch := EpochNumber(blockNum)
-
 	seed, err := em.GetSeed(epoch, chain)
 	if err != nil {
 		return nil, err
 	}
+	return em.getContextBySeed(epoch, seed)
+}
 
+// GetContextForHeader returns the execution context for a specific header, resolving its seed
+// along the header's own ancestor branch so side-fork blocks across epoch boundaries verify accurately.
+func (em *EpochManager) GetContextForHeader(header *types.Header, chain consensus.ChainHeaderReader) (*RxContext, error) {
+	epoch := EpochNumber(header.Number.Uint64())
+	seed, err := em.ResolveSeedForHeader(header, chain)
+	if err != nil {
+		return nil, err
+	}
+	return em.getContextBySeed(epoch, seed)
+}
+
+func (em *EpochManager) getContextBySeed(epoch uint64, seed common.Hash) (*RxContext, error) {
 	em.mu.RLock()
-	ctx, exists := em.contexts[epoch]
+	ctx, exists := em.contexts[seed]
 	targetFast := em.fastMode
 	em.mu.RUnlock()
-	if exists && ctx.fastMode == targetFast && bytes.Equal(ctx.seed, seed.Bytes()) {
+	if exists && ctx != nil && ctx.fastMode == targetFast {
 		return ctx, nil
 	}
 
 	em.mu.Lock()
-	defer em.mu.Unlock()
-
-	// Double check under write lock
-	if ctx, exists = em.contexts[epoch]; exists && ctx.fastMode == em.fastMode && bytes.Equal(ctx.seed, seed.Bytes()) {
+	targetFast = em.fastMode
+	if ctx, exists = em.contexts[seed]; exists && ctx != nil && ctx.fastMode == targetFast {
+		em.mu.Unlock()
 		return ctx, nil
 	}
-	if exists && ctx != nil {
-		ctx.Close()
-		delete(em.contexts, epoch)
+
+	key := inflightKey{seed: seed, fastMode: targetFast}
+	if inflight, ok := em.inflight[key]; ok {
+		em.mu.Unlock()
+		<-inflight.done
+		return inflight.ctx, inflight.err
 	}
 
-	newCtx, err := NewRxContext(seed.Bytes(), em.fastMode)
+	initCall := &seedInit{done: make(chan struct{})}
+	em.inflight[key] = initCall
+	em.mu.Unlock()
+
+	// Allocate RandomX cache/dataset outside the lock so concurrent RPCs and verifications never block.
+	newCtx, err := NewRxContext(seed.Bytes(), targetFast)
+
+	em.mu.Lock()
+	delete(em.inflight, key)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create RxContext for epoch %d: %w", epoch, err)
+		initCall.err = fmt.Errorf("failed to create RxContext for epoch %d: %w", epoch, err)
+		close(initCall.done)
+		em.mu.Unlock()
+		return nil, initCall.err
 	}
 
-	em.contexts[epoch] = newCtx
+	// If another context was stored for this seed (e.g. previous mode), close it to prevent C memory leaks.
+	if oldCtx, hadOld := em.contexts[seed]; hadOld && oldCtx != nil && oldCtx != newCtx {
+		oldCtx.Close()
+	}
+	em.contexts[seed] = newCtx
+	if prevEp, ok := em.contextEpochs[seed]; !ok || epoch > prevEp {
+		em.contextEpochs[seed] = epoch
+	}
 
-	// Clean up stale contexts older than current epoch - 1
-	for ep, oldCtx := range em.contexts {
+	// Evict stale contexts older than epoch - 1
+	for s, ep := range em.contextEpochs {
 		if ep+1 < epoch {
-			oldCtx.Close()
-			delete(em.contexts, ep)
+			if staleCtx, ok := em.contexts[s]; ok && staleCtx != nil {
+				staleCtx.Close()
+				delete(em.contexts, s)
+			}
+			delete(em.contextEpochs, s)
 		}
 	}
+
+	initCall.ctx = newCtx
+	close(initCall.done)
+	em.mu.Unlock()
 
 	return newCtx, nil
 }
@@ -162,40 +264,38 @@ func (em *EpochManager) GetContext(blockNum uint64, chain consensus.ChainHeaderR
 // PrecomputeNextEpoch initiates background initialization of the upcoming epoch cache
 // once blockNum enters the SeedLag window (e.g. block 2048 - 64 = 1984).
 func (em *EpochManager) PrecomputeNextEpoch(blockNum uint64, chain consensus.ChainHeaderReader) {
+	if chain == nil {
+		return
+	}
 	epoch := EpochNumber(blockNum)
 	nextEpoch := epoch + 1
 	transitionBlock := nextEpoch * EpochLength
 	seedBlock := transitionBlock - SeedLag
 
 	if blockNum >= seedBlock && blockNum < transitionBlock {
-		em.mu.RLock()
-		_, exists := em.contexts[nextEpoch]
-		em.mu.RUnlock()
-		if !exists {
-			go func() {
-				seedHeader := chain.GetHeaderByNumber(seedBlock)
-				if seedHeader == nil {
-					return
-				}
-				seed := seedHeader.Hash()
-
-				em.mu.Lock()
-				if _, already := em.contexts[nextEpoch]; !already {
-					em.epochSeeds[nextEpoch] = seed
-					em.mu.Unlock()
-
-					// Allocate cache in background
-					bgCtx, err := NewRxContext(seed.Bytes(), em.fastMode)
-					if err == nil {
-						em.mu.Lock()
-						em.contexts[nextEpoch] = bgCtx
-						em.mu.Unlock()
-					}
-				} else {
-					em.mu.Unlock()
-				}
-			}()
+		seedHeader := chain.GetHeaderByNumber(seedBlock)
+		if seedHeader == nil {
+			return
 		}
+		seed := seedHeader.Hash()
+
+		em.mu.RLock()
+		ctx, exists := em.contexts[seed]
+		targetFast := em.fastMode
+		_, isInflight := em.inflight[inflightKey{seed: seed, fastMode: targetFast}]
+		em.mu.RUnlock()
+
+		if (exists && ctx != nil && ctx.fastMode == targetFast) || isInflight {
+			return
+		}
+
+		go func() {
+			em.mu.Lock()
+			em.epochSeeds[nextEpoch] = seed
+			em.mu.Unlock()
+
+			_, _ = em.getContextBySeed(nextEpoch, seed)
+		}()
 	}
 }
 
@@ -204,8 +304,13 @@ func (em *EpochManager) Close() {
 	em.mu.Lock()
 	defer em.mu.Unlock()
 
-	for ep, ctx := range em.contexts {
-		ctx.Close()
-		delete(em.contexts, ep)
+	for s, ctx := range em.contexts {
+		if ctx != nil {
+			ctx.Close()
+		}
+		delete(em.contexts, s)
+	}
+	for s := range em.contextEpochs {
+		delete(em.contextEpochs, s)
 	}
 }

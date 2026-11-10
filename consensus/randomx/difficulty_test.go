@@ -179,3 +179,41 @@ func TestMTP11StrictValidation(t *testing.T) {
 		t.Errorf("Expected ErrFutureBlock, got %v", err)
 	}
 }
+
+func TestLWMAMonotonicTimestampClamp(t *testing.T) {
+	chain := NewFakeChainReader()
+	initDiff := big.NewInt(0x40000)
+
+	parent := &types.Header{
+		Number:     big.NewInt(0),
+		Time:       1000,
+		Difficulty: initDiff,
+	}
+	chain.AddHeader(parent)
+
+	// Simulate timestamp oscillation within MTP-11 bounds (alternating +15s and -14s steps)
+	baseTime := uint64(1000)
+	for i := int64(1); i <= 20; i++ {
+		var ts uint64
+		if i%2 == 1 {
+			ts = baseTime + uint64(i)*2 + 15
+		} else {
+			ts = baseTime + uint64(i)*2
+		}
+		h := &types.Header{
+			Number:     big.NewInt(i),
+			Time:       ts,
+			Difficulty: initDiff,
+			ParentHash: parent.Hash(),
+		}
+		chain.AddHeader(h)
+		parent = h
+	}
+
+	// Because overall elapsed time across 20 blocks is ~40s (<< 20 * 30s = 600s),
+	// difficulty must still increase rather than being tricked downward by negative solvetime resets.
+	nextDiff := CalculateDifficulty(chain, parent.Time+30, parent)
+	if nextDiff.Cmp(initDiff) <= 0 {
+		t.Fatalf("Expected difficulty to increase despite oscillating timestamps, got %v <= %v", nextDiff, initDiff)
+	}
+}
