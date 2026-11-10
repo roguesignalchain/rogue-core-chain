@@ -258,11 +258,9 @@ func newHandler(config *handlerConfig) (*handler, error) {
 		}
 		// If snap sync is running, deny importing weird blocks. This is a problematic
 		// clause when starting up a new network, because snap-syncing miners might not
-		// accept each others' blocks until a restart. Unfortunately we haven't figured
-		// out a way yet where nodes can decide unilaterally whether the network is new
-		// or not. This should be fixed if we figure out a solution.
-		if !h.synced.Load() {
-			log.Warn("Syncing, discarded propagated block", "number", blocks[0].Number(), "hash", blocks[0].Hash())
+		// accept each others' blocks until a restart.
+		if h.snapSync.Load() {
+			log.Warn("Snap syncing, discarded propagated block", "number", blocks[0].Number(), "hash", blocks[0].Hash())
 			return 0, nil
 		}
 		if h.merger.TDDReached() {
@@ -289,8 +287,8 @@ func newHandler(config *handlerConfig) (*handler, error) {
 			return 0, nil
 		}
 		n, err := h.chain.InsertChain(blocks)
-		// PTAL(meowsbits) This chunk was removed upstream. (No acceptTxs.Store...)
 		if err == nil {
+			h.enableSyncedFeatures() // Mark initial sync done on any fetcher import
 			h.eventMux.Post(fetcher.InsertChainEvent{Blocks: blocks})
 		}
 		return n, err

@@ -32,7 +32,7 @@ import (
 
 const (
 	forceSyncCycle      = 10 * time.Second // Time interval to force syncs, even if few peers are available
-	defaultMinSyncPeers = 5                // Amount of peers desired to start syncing
+	defaultMinSyncPeers = 1                // Amount of peers desired to start syncing (immediate sync for Rogue Signal)
 )
 
 var (
@@ -238,6 +238,9 @@ func (cs *chainSyncer) nextSyncOp() *chainSyncOp {
 			// - AF is disabled (so we should reenable).
 			!cs.handler.chain.IsArtificialFinalityEnabled() {
 			cs.handler.chain.EnableArtificialFinality(true, "reason", "synced", "peers", cs.handler.peers.len())
+		}
+		if !cs.handler.snapSync.Load() && !cs.handler.synced.Load() {
+			cs.handler.enableSyncedFeatures()
 		}
 		return nil // We're in sync.
 	}
