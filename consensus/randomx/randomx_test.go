@@ -1,6 +1,7 @@
 package randomx
 
 import (
+	"errors"
 	"math/big"
 	"testing"
 	"time"
@@ -151,12 +152,17 @@ func TestVerifyHeadersBatch(t *testing.T) {
 	// Create a chain of 3 headers where each parent is the previous header in the batch
 	h1 := &types.Header{
 		ParentHash: genesis.Hash(),
+		UncleHash:  types.EmptyUncleHash,
 		Number:     big.NewInt(1),
 		Time:       genesis.Time + 30,
 		GasLimit:   60000000,
 		Extra:      []byte("Rogue Node v0.1.0"),
 	}
-	h1.Difficulty = CalculateDifficulty(chain, h1.Time, genesis)
+	d1, err := CalculateDifficulty(chain, h1.Time, genesis)
+	if err != nil {
+		t.Fatalf("CalculateDifficulty h1 failed: %v", err)
+	}
+	h1.Difficulty = d1
 
 	tempChain := NewFakeChainReader()
 	tempChain.AddHeader(genesis)
@@ -164,20 +170,30 @@ func TestVerifyHeadersBatch(t *testing.T) {
 
 	h2 := &types.Header{
 		ParentHash: h1.Hash(),
+		UncleHash:  types.EmptyUncleHash,
 		Number:     big.NewInt(2),
 		Time:       h1.Time + 30,
 		GasLimit:   60000000,
 	}
-	h2.Difficulty = CalculateDifficulty(tempChain, h2.Time, h1)
+	d2, err := CalculateDifficulty(tempChain, h2.Time, h1)
+	if err != nil {
+		t.Fatalf("CalculateDifficulty h2 failed: %v", err)
+	}
+	h2.Difficulty = d2
 	tempChain.AddHeader(h2)
 
 	h3 := &types.Header{
 		ParentHash: h2.Hash(),
+		UncleHash:  types.EmptyUncleHash,
 		Number:     big.NewInt(3),
 		Time:       h2.Time + 30,
 		GasLimit:   60000000,
 	}
-	h3.Difficulty = CalculateDifficulty(tempChain, h3.Time, h2)
+	d3, err := CalculateDifficulty(tempChain, h3.Time, h2)
+	if err != nil {
+		t.Fatalf("CalculateDifficulty h3 failed: %v", err)
+	}
+	h3.Difficulty = d3
 
 	headers := []*types.Header{h1, h2, h3}
 	seals := []bool{false, false, false}
@@ -213,12 +229,17 @@ func TestExtraDataLimitValidation(t *testing.T) {
 	validExtra := make([]byte, MaxExtraDataSize)
 	hValid := &types.Header{
 		ParentHash: genesis.Hash(),
+		UncleHash:  types.EmptyUncleHash,
 		Number:     big.NewInt(1),
 		Time:       now,
 		GasLimit:   60000000,
 		Extra:      validExtra,
 	}
-	hValid.Difficulty = CalculateDifficulty(chain, hValid.Time, genesis)
+	dValid, err := CalculateDifficulty(chain, hValid.Time, genesis)
+	if err != nil {
+		t.Fatalf("CalculateDifficulty hValid failed: %v", err)
+	}
+	hValid.Difficulty = dValid
 	if err := rx.VerifyHeader(chain, hValid, false); err != nil {
 		t.Fatalf("Expected 64-byte ExtraData to be valid, got: %v", err)
 	}
@@ -227,12 +248,17 @@ func TestExtraDataLimitValidation(t *testing.T) {
 	oversizedExtra := make([]byte, MaxExtraDataSize+1)
 	hInvalid := &types.Header{
 		ParentHash: genesis.Hash(),
+		UncleHash:  types.EmptyUncleHash,
 		Number:     big.NewInt(1),
 		Time:       now,
 		GasLimit:   60000000,
 		Extra:      oversizedExtra,
 	}
-	hInvalid.Difficulty = CalculateDifficulty(chain, hInvalid.Time, genesis)
+	dInvalid, err := CalculateDifficulty(chain, hInvalid.Time, genesis)
+	if err != nil {
+		t.Fatalf("CalculateDifficulty hInvalid failed: %v", err)
+	}
+	hInvalid.Difficulty = dInvalid
 	if err := rx.VerifyHeader(chain, hInvalid, false); err == nil {
 		t.Fatal("Expected oversized 65-byte ExtraData to be rejected, but got nil")
 	}
@@ -410,11 +436,16 @@ func TestGasLimitValidation(t *testing.T) {
 	// 1. Jumping gasLimit by 2x parent must be rejected by misc.VerifyGaslimit
 	hJump := &types.Header{
 		ParentHash: genesis.Hash(),
+		UncleHash:  types.EmptyUncleHash,
 		Number:     big.NewInt(1),
 		Time:       now,
 		GasLimit:   120000000,
 	}
-	hJump.Difficulty = CalculateDifficulty(chain, hJump.Time, genesis)
+	dJump, err := CalculateDifficulty(chain, hJump.Time, genesis)
+	if err != nil {
+		t.Fatalf("CalculateDifficulty hJump failed: %v", err)
+	}
+	hJump.Difficulty = dJump
 	if err := rx.VerifyHeader(chain, hJump, false); err == nil {
 		t.Fatal("Expected header with 2x parent GasLimit jump to be rejected")
 	}
@@ -422,11 +453,16 @@ func TestGasLimitValidation(t *testing.T) {
 	// 2. GasLimit within ±1/1024 delta must be accepted
 	hValid := &types.Header{
 		ParentHash: genesis.Hash(),
+		UncleHash:  types.EmptyUncleHash,
 		Number:     big.NewInt(1),
 		Time:       now,
 		GasLimit:   60000000 + (60000000/1024 - 1),
 	}
-	hValid.Difficulty = CalculateDifficulty(chain, hValid.Time, genesis)
+	dValid2, err := CalculateDifficulty(chain, hValid.Time, genesis)
+	if err != nil {
+		t.Fatalf("CalculateDifficulty hValid2 failed: %v", err)
+	}
+	hValid.Difficulty = dValid2
 	if err := rx.VerifyHeader(chain, hValid, false); err != nil {
 		t.Fatalf("Expected valid GasLimit adjustment to pass, got: %v", err)
 	}
@@ -450,11 +486,16 @@ func TestDisallowedOptionalHeaderFields(t *testing.T) {
 	makeBase := func() *types.Header {
 		h := &types.Header{
 			ParentHash: genesis.Hash(),
+			UncleHash:  types.EmptyUncleHash,
 			Number:     big.NewInt(1),
 			Time:       now,
 			GasLimit:   60000000,
 		}
-		h.Difficulty = CalculateDifficulty(chain, h.Time, genesis)
+		diff, err := CalculateDifficulty(chain, h.Time, genesis)
+		if err != nil {
+			t.Fatalf("CalculateDifficulty base failed: %v", err)
+		}
+		h.Difficulty = diff
 		return h
 	}
 
@@ -489,5 +530,40 @@ func TestDisallowedOptionalHeaderFields(t *testing.T) {
 	hBeacon.ParentBeaconRoot = &emptyRoot
 	if err := rx.VerifyHeader(chain, hBeacon, false); err == nil {
 		t.Fatal("Expected non-nil ParentBeaconRoot to be rejected")
+	}
+}
+
+func TestStrictEmptyUncleHash(t *testing.T) {
+	chain := NewFakeChainReader()
+	now := uint64(time.Now().Unix())
+
+	genesis := &types.Header{
+		Number:     big.NewInt(0),
+		Time:       now - 60,
+		Difficulty: big.NewInt(0x10000),
+		GasLimit:   60000000,
+	}
+	chain.AddHeader(genesis)
+
+	rx := New(Config{FastMode: false, Threads: 1})
+	defer rx.Close()
+
+	h := &types.Header{
+		ParentHash: genesis.Hash(),
+		Number:     big.NewInt(1),
+		Time:       now,
+		GasLimit:   60000000,
+		UncleHash:  common.HexToHash("0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"),
+	}
+	diff, err := CalculateDifficulty(chain, h.Time, genesis)
+	if err != nil {
+		t.Fatalf("CalculateDifficulty failed: %v", err)
+	}
+	h.Difficulty = diff
+
+	if err := rx.VerifyHeader(chain, h, false); err == nil {
+		t.Fatal("Expected header with non-empty UncleHash to be rejected")
+	} else if !errors.Is(err, ErrUnclesNotAllowed) {
+		t.Fatalf("Expected ErrUnclesNotAllowed, got %v", err)
 	}
 }

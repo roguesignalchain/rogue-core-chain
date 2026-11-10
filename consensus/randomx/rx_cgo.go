@@ -156,7 +156,11 @@ func NewRxContext(seed []byte, fastMode bool) (*RxContext, error) {
 	}
 
 	ctx.vmPool.New = func() interface{} {
-		return ctx.createVM()
+		vm := ctx.createVM()
+		if vm == nil {
+			return nil
+		}
+		return vm
 	}
 
 	return ctx, nil
@@ -212,7 +216,10 @@ func (ctx *RxContext) CalculateHash(input []byte) ([32]byte, error) {
 	if item == nil {
 		return [32]byte{}, errors.New("failed to allocate RandomX VM")
 	}
-	vm := item.(*VM)
+	vm, ok := item.(*VM)
+	if !ok || vm == nil || vm.raw == nil {
+		return [32]byte{}, errors.New("failed to allocate RandomX VM")
+	}
 	defer ctx.vmPool.Put(vm)
 
 	var output [32]byte

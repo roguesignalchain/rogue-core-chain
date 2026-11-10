@@ -1,6 +1,7 @@
 package randomx
 
 import (
+	"errors"
 	"math/big"
 	"testing"
 
@@ -45,7 +46,10 @@ func TestLWMAAdjustsUpWhenFast(t *testing.T) {
 		parent = header
 	}
 
-	nextDiff := CalculateDifficulty(chain, parent.Time+10, parent)
+	nextDiff, err := CalculateDifficulty(chain, parent.Time+10, parent)
+	if err != nil {
+		t.Fatalf("CalculateDifficulty failed: %v", err)
+	}
 	if nextDiff.Cmp(initDiff) <= 0 {
 		t.Errorf("Expected difficulty to increase when blocks are fast, got %v <= %v", nextDiff, initDiff)
 	}
@@ -81,7 +85,10 @@ func TestLWMAAdjustsDownWhenSlow(t *testing.T) {
 		parent = header
 	}
 
-	nextDiff := CalculateDifficulty(chain, parent.Time+75, parent)
+	nextDiff, err := CalculateDifficulty(chain, parent.Time+75, parent)
+	if err != nil {
+		t.Fatalf("CalculateDifficulty failed: %v", err)
+	}
 	if nextDiff.Cmp(initDiff) >= 0 {
 		t.Errorf("Expected difficulty to decrease when blocks are slow, got %v >= %v", nextDiff, initDiff)
 	}
@@ -118,8 +125,14 @@ func TestLWMACandidateTimestampIndependence(t *testing.T) {
 
 	// A dishonest miner trying to manipulate their candidate header timestamp
 	// must get the exact same difficulty as an honest miner.
-	diffHonest := CalculateDifficulty(chain, parent.Time+30, parent)
-	diffManipulated := CalculateDifficulty(chain, parent.Time+100000, parent)
+	diffHonest, err := CalculateDifficulty(chain, parent.Time+30, parent)
+	if err != nil {
+		t.Fatalf("CalculateDifficulty failed: %v", err)
+	}
+	diffManipulated, err := CalculateDifficulty(chain, parent.Time+100000, parent)
+	if err != nil {
+		t.Fatalf("CalculateDifficulty failed: %v", err)
+	}
 	if diffHonest.Cmp(diffManipulated) != 0 {
 		t.Fatalf("LWMA-1 must be independent of candidate header timestamp: got %v vs %v", diffHonest, diffManipulated)
 	}
@@ -212,8 +225,32 @@ func TestLWMAMonotonicTimestampClamp(t *testing.T) {
 
 	// Because overall elapsed time across 20 blocks is ~40s (<< 20 * 30s = 600s),
 	// difficulty must still increase rather than being tricked downward by negative solvetime resets.
-	nextDiff := CalculateDifficulty(chain, parent.Time+30, parent)
+	nextDiff, err := CalculateDifficulty(chain, parent.Time+30, parent)
+	if err != nil {
+		t.Fatalf("CalculateDifficulty failed: %v", err)
+	}
 	if nextDiff.Cmp(initDiff) <= 0 {
 		t.Fatalf("Expected difficulty to increase despite oscillating timestamps, got %v <= %v", nextDiff, initDiff)
+	}
+}
+
+func TestLWMAMissingAncestorDeterministicError(t *testing.T) {
+	chain := NewFakeChainReader()
+
+	initDiff := big.NewInt(0x40000)
+	parent := &types.Header{
+		Number:     big.NewInt(10),
+		Time:       1000 + 10*30,
+		Difficulty: initDiff,
+	}
+	chain.AddHeader(parent)
+	// Do not add ancestors 0..9 to chain
+
+	diff, err := CalculateDifficulty(chain, parent.Time+30, parent)
+	if err == nil {
+		t.Fatalf("Expected CalculateDifficulty to fail when ancestors are missing, got diff %v", diff)
+	}
+	if !errors.Is(err, consensus.ErrUnknownAncestor) {
+		t.Fatalf("Expected consensus.ErrUnknownAncestor, got %v", err)
 	}
 }

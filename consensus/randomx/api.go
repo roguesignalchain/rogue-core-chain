@@ -68,6 +68,9 @@ func (api *API) GetHashrate() uint64 {
 
 // SetFastMode toggles between RandomX Light Mode (~256MB) and Fast Mode (~2.08GB) on the local node.
 func (api *API) SetFastMode(fastMode bool) bool {
+	if api.rx.IsFastMode() == fastMode {
+		return true
+	}
 	api.rx.SetFastMode(fastMode)
 	return true
 }

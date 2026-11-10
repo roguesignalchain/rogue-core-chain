@@ -11,14 +11,16 @@
     "istanbulBlock": 0,
     "eip3855Block": 0,
     "eip5656Block": 0,
+    "ecbp1100FBlock": 0,
+    "disposalBlock": 0,
     "randomx": {
       "fastMode": false,
       "treasury": "0xe9aaE535B7971A9AC8C6af0e4B524D02260D3a03"
     }
   },
   "nonce": "0x0000000000000000",
-  "timestamp": "0x69adb900",
-  "extraData": "0x526f677565205369676e616c2047656e657369732032303236",
+  "timestamp": "0x6910d980",
+  "extraData": "0x524f4755453a3a383030303535202f2f205448455f53494c49434f4e5f42454c4f4e47535f544f5f5448455f4d414e59202f2f2030392e31312e3236",
   "gasLimit": "0x3938700",
   "difficulty": "0x10000",
   "mixHash": "0x0000000000000000000000000000000000000000000000000000000000000000",

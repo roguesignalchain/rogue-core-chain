@@ -146,6 +146,10 @@ func (rx *RandomX) SetThreads(threads int) {
 // SetFastMode dynamically switches between RandomX Light Mode (~256MB) and Fast Mode (~2.08GB).
 func (rx *RandomX) SetFastMode(fastMode bool) {
 	rx.lock.Lock()
+	if rx.fastMode == fastMode {
+		rx.lock.Unlock()
+		return
+	}
 	rx.fastMode = fastMode
 	rx.lock.Unlock()
 	rx.epochs.SetFastMode(fastMode)
@@ -216,19 +220,27 @@ func (rx *RandomX) verifyHeader(chain consensus.ChainHeaderReader, header, paren
 		return consensus.ErrInvalidNumber
 	}
 
-	// 2. Verify ExtraData size limit (<= 64 bytes) to prevent header bloat attacks
+	// 2. Verify that UncleHash is EmptyUncleHash (uncles are strictly forbidden on Rogue Signal)
+	if header.UncleHash != types.EmptyUncleHash {
+		return ErrUnclesNotAllowed
+	}
+
+	// 3. Verify ExtraData size limit (<= 64 bytes) to prevent header bloat attacks
 	if len(header.Extra) > MaxExtraDataSize {
 		return fmt.Errorf("%w: have %d bytes, max %d bytes", ErrExtraDataTooLong, len(header.Extra), MaxExtraDataSize)
 	}
 
-	// 3. Verify strict timestamp rules (MTP-11 + max 15s future drift)
+	// 4. Verify strict timestamp rules (MTP-11 + max 15s future drift)
 	now := uint64(time.Now().Unix())
 	if err := VerifyHeaderTime(chain, header, parent, now); err != nil {
 		return err
 	}
 
-	// 4. Verify difficulty adjustment via LWMA-1
-	expectedDifficulty := CalculateDifficulty(chain, header.Time, parent)
+	// 5. Verify difficulty adjustment via LWMA-1
+	expectedDifficulty, err := CalculateDifficulty(chain, header.Time, parent)
+	if err != nil {
+		return err
+	}
 	if header.Difficulty.Cmp(expectedDifficulty) != 0 {
 		return fmt.Errorf("invalid difficulty: have %v, want %v", header.Difficulty, expectedDifficulty)
 	}
@@ -414,7 +426,11 @@ func (rx *RandomX) Prepare(chain consensus.ChainHeaderReader, header *types.Head
 		header.Time = mtp + 1
 	}
 
-	header.Difficulty = CalculateDifficulty(chain, header.Time, parent)
+	diff, err := CalculateDifficulty(chain, header.Time, parent)
+	if err != nil {
+		return err
+	}
+	header.Difficulty = diff
 	header.UncleHash = types.EmptyUncleHash
 
 	// Trigger background precomputation of next epoch cache if inside seed lag window
@@ -653,7 +669,14 @@ func (rx *RandomX) markAttempts(attempts int64) {
 
 // CalcDifficulty returns the difficulty of the next block.
 func (rx *RandomX) CalcDifficulty(chain consensus.ChainHeaderReader, time uint64, parent *types.Header) *big.Int {
-	return CalculateDifficulty(chain, time, parent)
+	diff, err := CalculateDifficulty(chain, time, parent)
+	if err != nil {
+		if parent != nil && parent.Difficulty != nil {
+			return new(big.Int).Set(parent.Difficulty)
+		}
+		return new(big.Int).Set(MinDifficulty)
+	}
+	return diff
 }
 
 // Hashrate implements consensus.PoW, returning the current mining hashrate of the internal CPU miner.

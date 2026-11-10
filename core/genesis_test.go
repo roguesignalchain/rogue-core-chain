@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"math/big"
+	"os"
 	"reflect"
 	"testing"
 
@@ -367,6 +368,25 @@ func TestRogueGenesisBlockAndFinality(t *testing.T) {
 	}
 	if !params.RogueChainConfig.IsEnabled(params.RogueChainConfig.GetECBP1100Transition, big.NewInt(0)) {
 		t.Error("Expected ECBP-1100 (MESS) to be enabled from block 0 on RogueChainConfig")
+	}
+}
+
+func TestRogueGenesisJSON(t *testing.T) {
+	file, err := os.Open("../genesis.json")
+	if err != nil {
+		t.Fatalf("Failed to open genesis.json: %v", err)
+	}
+	defer file.Close()
+
+	var genesis genesisT.Genesis
+	if err := json.NewDecoder(file).Decode(&genesis); err != nil {
+		t.Fatalf("Failed to decode genesis.json: %v", err)
+	}
+
+	block := GenesisToBlock(&genesis, nil)
+	t.Logf("genesis.json computed block hash: %s", block.Hash().Hex())
+	if block.Hash() != params.RogueGenesisHash {
+		t.Errorf("genesis.json block hash mismatch: have %s, want %s", block.Hash().Hex(), params.RogueGenesisHash.Hex())
 	}
 }
 

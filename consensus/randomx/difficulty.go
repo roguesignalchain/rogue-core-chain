@@ -2,6 +2,7 @@ package randomx
 
 import (
 	"errors"
+	"fmt"
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -88,14 +89,14 @@ func HashToBig(hash [32]byte) *big.Int {
 //	NextTarget = (AvgTarget * SolvetimeWeightSum) / (k * T * SolvetimeSum)
 //	where SolvetimeWeightSum = sum_{i=1}^{k} (i * solvetime_i)
 //	k = min(window, blockNumber)
-func CalculateDifficulty(chain consensus.ChainHeaderReader, time uint64, parent *types.Header) *big.Int {
+func CalculateDifficulty(chain consensus.ChainHeaderReader, time uint64, parent *types.Header) (*big.Int, error) {
 	if parent == nil {
-		return new(big.Int).Set(MinDifficulty)
+		return nil, consensus.ErrUnknownAncestor
 	}
 
 	parentNum := parent.Number.Uint64()
 	if parentNum == 0 {
-		return new(big.Int).Set(parent.Difficulty)
+		return new(big.Int).Set(parent.Difficulty), nil
 	}
 
 	targetTime := uint64(DefaultTargetBlockTime)
@@ -115,8 +116,7 @@ func CalculateDifficulty(chain consensus.ChainHeaderReader, time uint64, parent 
 	for i := int(k) - 1; i >= 0; i-- {
 		p := chain.GetHeader(curr.ParentHash, curr.Number.Uint64()-1)
 		if p == nil {
-			// If not enough ancestors are found, fall back to parent difficulty
-			return new(big.Int).Set(parent.Difficulty)
+			return nil, fmt.Errorf("%w: missing ancestor %d (%s) in LWMA window", consensus.ErrUnknownAncestor, curr.Number.Uint64()-1, curr.ParentHash.Hex())
 		}
 		headers[i] = p
 		curr = p
@@ -159,7 +159,7 @@ func CalculateDifficulty(chain consensus.ChainHeaderReader, time uint64, parent 
 	// denominator = k * (k + 1) * targetTime / 2
 	denominator := (k * (k + 1) * targetTime) / 2
 	if denominator == 0 {
-		return new(big.Int).Set(parent.Difficulty)
+		return new(big.Int).Set(parent.Difficulty), nil
 	}
 
 	// nextTarget = (avgTarget * weightedTimes) / denominator
@@ -190,7 +190,7 @@ func CalculateDifficulty(chain consensus.ChainHeaderReader, time uint64, parent 
 		nextDiff.Set(MinDifficulty)
 	}
 
-	return nextDiff
+	return nextDiff, nil
 }
 
 // CalculateMTP11 calculates the Past Median Time (MTP-11) for strict header validation.

@@ -18,6 +18,9 @@ const (
 
 	// CacheRetentionBlocks is the number of blocks to retain the previous epoch cache to handle chain reorgs.
 	CacheRetentionBlocks = uint64(128)
+
+	// MaxCachedContexts is the maximum number of RandomX contexts retained in memory simultaneously.
+	MaxCachedContexts = 3
 )
 
 type inflightKey struct {
@@ -47,6 +50,9 @@ type EpochManager struct {
 
 	// inflight deduplicates concurrent context allocations without holding the global lock during CGo allocation.
 	inflight map[inflightKey]*seedInit
+
+	// allocSem limits concurrent CGo dataset/cache initializations to prevent memory exhaustion DoS.
+	allocSem chan struct{}
 }
 
 // NewEpochManager creates a new epoch coordinator.
@@ -57,6 +63,7 @@ func NewEpochManager(fastMode bool) *EpochManager {
 		contextEpochs: make(map[common.Hash]uint64),
 		epochSeeds:    make(map[uint64]common.Hash),
 		inflight:      make(map[inflightKey]*seedInit),
+		allocSem:      make(chan struct{}, 2),
 	}
 }
 
@@ -64,6 +71,9 @@ func NewEpochManager(fastMode bool) *EpochManager {
 func (em *EpochManager) SetFastMode(fastMode bool) {
 	em.mu.Lock()
 	defer em.mu.Unlock()
+	if em.fastMode == fastMode {
+		return
+	}
 	em.fastMode = fastMode
 }
 
@@ -118,13 +128,6 @@ func (em *EpochManager) GetSeed(epoch uint64, chain consensus.ChainHeaderReader)
 	}
 
 	em.mu.Lock()
-	if oldSeed, hadSeed := em.epochSeeds[epoch]; hadSeed && oldSeed != headerHash {
-		if oldCtx, hasCtx := em.contexts[oldSeed]; hasCtx {
-			oldCtx.Close()
-			delete(em.contexts, oldSeed)
-			delete(em.contextEpochs, oldSeed)
-		}
-	}
 	em.epochSeeds[epoch] = headerHash
 	em.mu.Unlock()
 	return headerHash, nil
@@ -223,7 +226,10 @@ func (em *EpochManager) getContextBySeed(epoch uint64, seed common.Hash) (*RxCon
 	em.mu.Unlock()
 
 	// Allocate RandomX cache/dataset outside the lock so concurrent RPCs and verifications never block.
+	// allocSem bounds concurrent allocations to prevent RAM exhaustion spikes.
+	em.allocSem <- struct{}{}
 	newCtx, err := NewRxContext(seed.Bytes(), targetFast)
+	<-em.allocSem
 
 	em.mu.Lock()
 	delete(em.inflight, key)
@@ -252,6 +258,26 @@ func (em *EpochManager) getContextBySeed(epoch uint64, seed common.Hash) (*RxCon
 			}
 			delete(em.contextEpochs, s)
 		}
+	}
+
+	// Bound total cached contexts to MaxCachedContexts
+	for len(em.contexts) > MaxCachedContexts {
+		var oldestSeed common.Hash
+		var lowestEpoch uint64 = ^uint64(0)
+		for s, ep := range em.contextEpochs {
+			if ep < lowestEpoch {
+				lowestEpoch = ep
+				oldestSeed = s
+			}
+		}
+		if lowestEpoch == ^uint64(0) {
+			break
+		}
+		if staleCtx, ok := em.contexts[oldestSeed]; ok && staleCtx != nil {
+			staleCtx.Close()
+			delete(em.contexts, oldestSeed)
+		}
+		delete(em.contextEpochs, oldestSeed)
 	}
 
 	initCall.ctx = newCtx
