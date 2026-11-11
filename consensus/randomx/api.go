@@ -216,11 +216,20 @@ func (api *RogueAPI) GetMinerLevel(address common.Address) (uint32, error) {
 func (api *RogueAPI) GetMinerStats(address common.Address) (MinerStats, error) {
 	var st *state.StateDB
 	if sr, ok := api.chain.(interface {
-		StateAt(root common.Hash) (*state.StateDB, error)
-	}); ok && api.chain != nil && api.chain.CurrentHeader() != nil {
-		header := api.chain.CurrentHeader()
-		if s, err := sr.StateAt(header.Root); err == nil {
+		State() (*state.StateDB, error)
+	}); ok && api.chain != nil {
+		if s, err := sr.State(); err == nil && s != nil {
 			st = s
+		}
+	}
+	if st == nil {
+		if sr, ok := api.chain.(interface {
+			StateAt(root common.Hash) (*state.StateDB, error)
+		}); ok && api.chain != nil && api.chain.CurrentHeader() != nil {
+			header := api.chain.CurrentHeader()
+			if s, err := sr.StateAt(header.Root); err == nil {
+				st = s
+			}
 		}
 	}
 
@@ -228,6 +237,31 @@ func (api *RogueAPI) GetMinerStats(address common.Address) (MinerStats, error) {
 	if st != nil {
 		blocks = GetMinerBlockCount(st, address)
 	}
+
+	// Canonical header fallback: if StateDB reports 0 blocks (e.g. historical blocks
+	// mined prior to StateDB persistence fix), scan canonical headers to reflect real progress.
+	if blocks == 0 && api.chain != nil && api.chain.CurrentHeader() != nil {
+		currentNum := api.chain.CurrentHeader().Number.Uint64()
+		maxScan := uint64(50000)
+		start := uint64(1)
+		if currentNum > maxScan {
+			start = currentNum - maxScan
+		}
+		var scanned uint64
+		for n := currentNum; n >= start; n-- {
+			hdr := api.chain.GetHeaderByNumber(n)
+			if hdr == nil {
+				break
+			}
+			if hdr.Coinbase == address {
+				scanned++
+			}
+		}
+		if scanned > blocks {
+			blocks = scanned
+		}
+	}
+
 	return CalculateMinerStats(address, blocks), nil
 }
 

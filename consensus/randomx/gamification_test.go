@@ -1,12 +1,14 @@
 package randomx
 
 import (
+	"math/big"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/params/types/ctypes"
 )
 
 func TestCalculateMinerStats(t *testing.T) {
@@ -71,6 +73,8 @@ func TestIncrementMinerBlockCount(t *testing.T) {
 	IncrementMinerBlockCount(sdb, miner)
 	IncrementMinerBlockCount(sdb, miner)
 
+	sdb.IntermediateRoot(true)
+
 	count = GetMinerBlockCount(sdb, miner)
 	if count != 3 {
 		t.Fatalf("expected count 3, got %d", count)
@@ -82,5 +86,63 @@ func TestIncrementMinerBlockCount(t *testing.T) {
 	}
 	if stats.Title != "Recon Runner" {
 		t.Fatalf("expected title 'Recon Runner', got %q", stats.Title)
+	}
+}
+
+type mockGamificationChain struct {
+	headersByNum map[uint64]*types.Header
+	current       *types.Header
+}
+
+func (m *mockGamificationChain) Config() ctypes.ChainConfigurator { return nil }
+func (m *mockGamificationChain) CurrentHeader() *types.Header      { return m.current }
+func (m *mockGamificationChain) GetHeader(hash common.Hash, number uint64) *types.Header {
+	return m.headersByNum[number]
+}
+func (m *mockGamificationChain) GetHeaderByNumber(number uint64) *types.Header {
+	return m.headersByNum[number]
+}
+func (m *mockGamificationChain) GetHeaderByHash(hash common.Hash) *types.Header { return nil }
+func (m *mockGamificationChain) GetTd(hash common.Hash, number uint64) *big.Int  { return nil }
+
+func TestGetMinerStatsFallback(t *testing.T) {
+	miner := common.HexToAddress("0x0544802665bc7c22124348e745a7abaa8420e197")
+	other := common.HexToAddress("0x70b2656c4dd9556a6243f9f5de1b07d000000000")
+
+	chain := &mockGamificationChain{
+		headersByNum: make(map[uint64]*types.Header),
+	}
+
+	// Blocks: #1-#4 other, #5 miner, #6-#7 other, #8-#11 miner (5 blocks total)
+	for i := uint64(1); i <= 11; i++ {
+		coinbase := other
+		if i == 5 || i >= 8 {
+			coinbase = miner
+		}
+		h := &types.Header{
+			Number:   big.NewInt(int64(i)),
+			Coinbase: coinbase,
+		}
+		chain.headersByNum[i] = h
+		chain.current = h
+	}
+
+	api := &RogueAPI{chain: chain}
+	stats, err := api.GetMinerStats(miner)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if stats.BlocksMined != 5 {
+		t.Errorf("expected 5 blocks mined, got %d", stats.BlocksMined)
+	}
+	if stats.Level != 1 {
+		t.Errorf("expected level 1, got %d", stats.Level)
+	}
+	if stats.Title != "Recon Runner" {
+		t.Errorf("expected 'Recon Runner', got %q", stats.Title)
+	}
+	if stats.NextLevelXP != 25 {
+		t.Errorf("expected next level XP 25, got %d", stats.NextLevelXP)
 	}
 }
