@@ -63,6 +63,15 @@ func (ht *hashrateTracker) Mark(attempts int64) {
 	ht.totalHashes.Add(attempts)
 }
 
+func (ht *hashrateTracker) Reset() {
+	ht.mu.Lock()
+	defer ht.mu.Unlock()
+	ht.lastTick = time.Time{}
+	ht.lastHashes = 0
+	ht.currentRate = 0
+	ht.totalHashes.Store(0)
+}
+
 func (ht *hashrateTracker) Rate() float64 {
 	ht.mu.Lock()
 	defer ht.mu.Unlock()
@@ -141,6 +150,9 @@ func (rx *RandomX) SetThreads(threads int) {
 	rx.lock.Lock()
 	defer rx.lock.Unlock()
 	rx.threads = threads
+	if threads <= 0 {
+		rx.tracker.Reset()
+	}
 }
 
 // SetFastMode dynamically switches between RandomX Light Mode (~256MB) and Fast Mode (~2.08GB).
@@ -681,13 +693,17 @@ func (rx *RandomX) CalcDifficulty(chain consensus.ChainHeaderReader, time uint64
 
 // Hashrate implements consensus.PoW, returning the current mining hashrate of the internal CPU miner.
 func (rx *RandomX) Hashrate() float64 {
+	rx.lock.RLock()
+	threads := rx.threads
+	rx.lock.RUnlock()
+	if threads <= 0 {
+		return 0
+	}
+
 	localRate := rx.tracker.Rate()
 	if localRate == 0 {
 		ms := rx.hashrate.Snapshot()
 		localRate = ms.Rate1()
-		if localRate == 0 && ms.Count() > 0 {
-			localRate = ms.RateMean()
-		}
 	}
 	return localRate
 }

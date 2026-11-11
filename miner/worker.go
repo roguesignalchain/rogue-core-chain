@@ -229,6 +229,7 @@ type worker struct {
 	taskCh             chan *task
 	resultCh           chan *types.Block
 	startCh            chan struct{}
+	stopCh             chan struct{}
 	exitCh             chan struct{}
 	resubmitIntervalCh chan time.Duration
 	resubmitAdjustCh   chan *intervalAdjust
@@ -311,6 +312,7 @@ func newWorker(config *Config, chainConfig ctypes.ChainConfigurator, engine cons
 		taskCh:             make(chan *task),
 		resultCh:           make(chan *types.Block, resultQueueSize),
 		startCh:            make(chan struct{}, 1),
+		stopCh:             make(chan struct{}, 1),
 		exitCh:             make(chan struct{}),
 		resubmitIntervalCh: make(chan time.Duration),
 		resubmitAdjustCh:   make(chan *intervalAdjust, resubmitAdjustChanSize),
@@ -438,9 +440,13 @@ func (w *worker) start() {
 	w.startCh <- struct{}{}
 }
 
-// stop sets the running status as 0.
+// stop sets the running status as 0 and aborts active sealing.
 func (w *worker) stop() {
 	w.running.Store(false)
+	select {
+	case w.stopCh <- struct{}{}:
+	default:
+	}
 }
 
 // isRunning returns an indicator whether worker is running or not.
@@ -741,6 +747,9 @@ func (w *worker) taskLoop() {
 				delete(w.pendingTasks, sealHash)
 				w.pendingMu.Unlock()
 			}
+		case <-w.stopCh:
+			interrupt()
+			prev = common.Hash{}
 		case <-w.exitCh:
 			interrupt()
 			return
