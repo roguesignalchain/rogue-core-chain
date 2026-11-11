@@ -78,8 +78,14 @@ func SplitReward(totalReward *big.Int) (minerReward *big.Int, treasuryReward *bi
 	return minerReward, treasuryReward
 }
 
-// AccumulateRewards credits the block rewards to the miner coinbase (95%) and protocol treasury (5%).
+// AccumulateRewards credits the block rewards to the miner coinbase (95%) and protocol treasury (5%),
+// and updates the protocol-level gamification miner block counter in StateDB.
 func AccumulateRewards(state *state.StateDB, header *types.Header, treasury common.Address) {
+	// Record protocol-level gamification block count for the miner (active from block 1 onwards).
+	if header.Number != nil && header.Number.Uint64() >= 1 && header.Coinbase != (common.Address{}) {
+		IncrementMinerBlockCount(state, header.Coinbase)
+	}
+
 	totalReward := CalculateBlockReward(header.Number.Uint64())
 	if totalReward.Sign() <= 0 {
 		return

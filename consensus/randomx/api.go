@@ -6,6 +6,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/consensus"
+	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 )
 
@@ -194,4 +195,44 @@ func (api *API) GetConsensusStatus() ConsensusStatus {
 		LocalHashrate:       uint64(api.rx.Hashrate()),
 		EpochInfo:           epochInfo,
 	}
+}
+
+// RogueAPI exposes Rogue Signal specific network, consensus, and gamification methods.
+type RogueAPI struct {
+	rx    *RandomX
+	chain consensus.ChainHeaderReader
+}
+
+// GetMinerLevel returns the numerical gamification level of a miner address.
+func (api *RogueAPI) GetMinerLevel(address common.Address) (uint32, error) {
+	stats, err := api.GetMinerStats(address)
+	if err != nil {
+		return 0, err
+	}
+	return stats.Level, nil
+}
+
+// GetMinerStats returns the full gamification profile, XP, title, and progress of a miner address.
+func (api *RogueAPI) GetMinerStats(address common.Address) (MinerStats, error) {
+	var st *state.StateDB
+	if sr, ok := api.chain.(interface {
+		StateAt(root common.Hash) (*state.StateDB, error)
+	}); ok && api.chain != nil && api.chain.CurrentHeader() != nil {
+		header := api.chain.CurrentHeader()
+		if s, err := sr.StateAt(header.Root); err == nil {
+			st = s
+		}
+	}
+
+	var blocks uint64
+	if st != nil {
+		blocks = GetMinerBlockCount(st, address)
+	}
+	return CalculateMinerStats(address, blocks), nil
+}
+
+// GetConsensusStatus returns the comprehensive consensus and security status of the Rogue Signal node.
+func (api *RogueAPI) GetConsensusStatus() ConsensusStatus {
+	diagAPI := &API{rx: api.rx, chain: api.chain}
+	return diagAPI.GetConsensusStatus()
 }
