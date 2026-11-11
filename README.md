@@ -73,6 +73,7 @@
 | **Default WS RPC** | **`38846`** | Dedicated WebSocket port |
 | **Remote Mining RPC** | **Disabled** | `eth_getWork` and `eth_submitWork` are disabled to block Stratum pools and rigs |
 | **EVM Fork Base** | **Cancun / Shanghai (Classical PoW)** | `PUSH0`, `MCOPY`, `TSTORE/TLOAD` enabled from block 0 (100% fees to miner) |
+| **Miner Gamification**| **7 Cyberpunk Tiers** | On-chain persistence in `StateDB` at `0x...0020`, queried via `rogue_getMinerLevel` / `rogue_getMinerStats` |
 
 ---
 
@@ -113,6 +114,7 @@ $$\text{Reward} = \left\lfloor \frac{25 \times 10^{18}}{2^{\text{Era}}} \right\r
 │  ├── difficulty.go : LWMA-1 (N=60, T=30s, clamp +-33%, MTP-11)         │
 │  ├── rewards.go    : 25 ROGUE base, 2.0M halving, 95%/5% split, 100M   │
 │  ├── epoch.go      : 2048-block epoch manager, 64-block lag, reorg safe│
+│  ├── gamification.go: StateDB persistence at 0x...0020, 7 Cyberpunk ranks│
 │  ├── randomx.go    : SealHash, 2-phase VerifyHeaders, MaxExtraData 64B │
 │  └── rx_cgo.go     : CGO bindings to librandomx.a (UAF-safe RLock)     │
 └───────────────────────────────────┬────────────────────────────────────┘
@@ -131,7 +133,12 @@ $$\text{Reward} = \left\lfloor \frac{25 \times 10^{18}}{2^{\text{Era}}} \right\r
   - Dynamically bootstraps for initial blocks ($H < 60$) using $k = \min(60, H)$.
   - Applies target clamping limiting difficulty shifts to $[67\%, 133\%]$ per block.
   - Implements `CalculateMTP11` checking that each block timestamp exceeds the median of the past 11 blocks.
-- **`rewards.go`**: Calculates the halving emission curve and splits rewards between miner coinbase (95%) and protocol treasury (5%).
+- **`rewards.go`**: Calculates the halving emission curve and splits rewards between miner coinbase (95%) and protocol treasury (5%). Triggers `RecordMinedBlock` for Block > 0.
+- **`gamification.go`**: Implements protocol-level on-chain miner levels and cyberpunk ranks:
+  - Stores canonical mined block count inside `StateDB` under contract `0x0000000000000000000000000000000000000020`.
+  - Calculates deterministic progression through 7 ranks (Level 0 *Unranked Runner* to Level 6 *Rogue Singularity*).
+  - Handles reorganization rewinding natively with the canonical state trie.
+- **`api.go`**: Exposes the `rogue` and `randomx` RPC namespaces (`rogue_getMinerLevel`, `rogue_getMinerStats`, `rogue_getConsensusStatus`, `randomx_getEpochInfo`).
 - **`epoch.go`**: Coordinates RandomX seed rotation every 2048 blocks.
   - Sets seed at block $E \times 2048 - 64$.
   - Precomputes the upcoming epoch cache asynchronously in a background goroutine during the 64-block lag window.
@@ -400,6 +407,43 @@ curl -X POST http://127.0.0.1:38845 \
   --data '{"jsonrpc":"2.0","method":"eth_getBalance","params":["0xe9aaE535B7971A9AC8C6af0e4B524D02260D3a03","latest"],"id":1}'
 ```
 
+#### Query Miner Cyberpunk Level (`rogue_getMinerLevel`):
+```bash
+curl -X POST http://127.0.0.1:38845 \
+  -H "Content-Type: application/json" \
+  --data '{"jsonrpc":"2.0","method":"rogue_getMinerLevel","params":["0xYourMinerAddress"],"id":1}'
+```
+
+#### Query Detailed Miner Progression Stats (`rogue_getMinerStats`):
+```bash
+curl -X POST http://127.0.0.1:38845 \
+  -H "Content-Type: application/json" \
+  --data '{"jsonrpc":"2.0","method":"rogue_getMinerStats","params":["0xYourMinerAddress"],"id":1}'
+```
+Response:
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "address": "0xYourMinerAddress",
+    "blocksMined": 142,
+    "level": 3,
+    "title": "Hash Warden",
+    "currentXP": 142,
+    "nextLevelXP": 500,
+    "progressPercent": 28.4
+  }
+}
+```
+
+#### Query Consensus Telemetry (`rogue_getConsensusStatus`):
+```bash
+curl -X POST http://127.0.0.1:38845 \
+  -H "Content-Type: application/json" \
+  --data '{"jsonrpc":"2.0","method":"rogue_getConsensusStatus","params":[],"id":1}'
+```
+
 ### Connecting with MetaMask
 
 You can add Rogue Signal directly to MetaMask or any EVM-compatible wallet:
@@ -420,6 +464,24 @@ forge create --rpc-url http://127.0.0.1:38845 \
   --private-key <YOUR_PRIVATE_KEY> \
   src/MyToken.sol:MyToken
 ```
+
+---
+
+## 🎖️ Protocol-Level Gamification & Cyberpunk Miner Tiers
+
+Rogue Signal pioneers protocol-enforced miner progression without monetary distortion. The network tracks solo miner blocks natively in the EVM state trie at system address `0x0000000000000000000000000000000000000020` (`keccak256(miner.Bytes())`), active from Block 1 onwards with strict reorg safety ($\le 90$ blocks).
+
+Miners progress through 7 cyberpunk tiers strictly via cryptographic work:
+
+| Level | Rank Title | Blocks Mined | Target XP | Badge Asset | Status |
+| :---: | :--- | :---: | :---: | :---: | :---: |
+| **Lv.0** | **Unranked Runner** | `0` | `1` | `lvl0.png` | `Active` |
+| **Lv.1** | **Recon Runner** | `1 – 24` | `25` | `lvl1.png` | `Active` |
+| **Lv.2** | **Signal Scraper** | `25 – 99` | `100` | `lvl2.png` | `Active` |
+| **Lv.3** | **Hash Warden** | `100 – 499` | `500` | `lvl3.png` | `Active` |
+| **Lv.4** | **Cipher Architect** | `500 – 2,499` | `2,500` | `lvl4.png` | `Active` |
+| **Lv.5** | **Apex Operator** | `2,500 – 9,999` | `10,000` | `lvl5.png` | `Active` |
+| **Lv.6** | **Rogue Singularity** | `10,000+` | `MAX` | `lvl6.png` | `Legendary` |
 
 ---
 

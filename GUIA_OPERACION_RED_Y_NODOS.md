@@ -34,6 +34,7 @@ Antes de iniciar cualquier proceso, se verificó el estado del entorno:
 | **Puerto HTTP RPC** | `38845` | API JSON-RPC |
 | **Puerto WS RPC** | `38846` | WebSocket JSON-RPC |
 | **Minería Remota** | **Deshabilitada** | `eth_getWork` y `eth_submitWork` bloqueados contra rigs/pools |
+| **Gamificación On-Chain**| 7 Rangos Cyberpunk | Persistencia en StateDB (`0x00...0020`), consulta vía `rogue_getMinerLevel` / `rogue_getMinerStats` |
 
 ---
 
@@ -88,7 +89,7 @@ Ejecuta el siguiente comando para poner en marcha el Nodo 1:
   --http \
   --http.addr 0.0.0.0 \
   --http.port 38845 \
-  --http.api "eth,net,web3,miner,personal,txpool,admin" \
+  --http.api "eth,net,web3,miner,personal,txpool,admin,rogue" \
   --http.corsdomain "*" \
   --ws \
   --ws.addr 0.0.0.0 \
@@ -298,6 +299,14 @@ Una vez abierta la aplicación gráfica:
    - Envía transferencias firmadas 100% de manera local y aislada en Rust.
 5. **Pestaña "Settings" (Configuración y Diagnóstico de Hardware)**:
    - Incluye también el botón **Verificar Recursos del Sistema** para ajustar el límite de caché RAM y parámetros del nodo sin riesgo.
+6. **Gamificación, Rangos Cyberpunk y Medallas de Minero**:
+   - Cada bloque canónico minado se acredita atómicamente en el contrato de sistema `0x0000000000000000000000000000000000000020`.
+   - El cliente de escritorio consulta el namespace `rogue_getMinerStats` y muestra tu medalla, nivel (0 a 6), barra de progreso de XP y avatar procedural *Voxel Bot*.
+   - También puedes consultar el estado desde la consola o terminal:
+     ```bash
+     curl -X POST http://127.0.0.1:38845 -H "Content-Type: application/json" \
+       --data '{"jsonrpc":"2.0","method":"rogue_getMinerStats","params":["0xTuDireccion"],"id":1}'
+     ```
 
 ---
 
