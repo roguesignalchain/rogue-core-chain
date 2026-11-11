@@ -55,7 +55,7 @@
 | **Target Clamping** | **$\pm 33\%$ per block** | Clamps adjustment to $[67\%, 133\%]$ to prevent hashrate shock attacks |
 | **Genesis Difficulty** | `0x10000` (65,536) | Calibrated initial difficulty for home CPU bootstrap |
 | **Timestamp Rules** | **Strict MTP-11** | Block time must exceed Past Median Time of past 11 blocks; max 15s future drift |
-| **Anti-51% Finality** | **`MaxReorgDepth = 90` + MESS** | 90-block hard rolling finality (~45m) + ECBP-1100 polynomial gravity (up to $31\times$ TD) |
+| **Anti-51% Finality** | **`MaxReorgDepth = 90` + MESS** | 90-block hard rolling finality (~45m) + ECBP-1100 polynomial gravity (up to $31\times$ TD, 15m safety interval) |
 | **Header Limits** | **`MaxExtraDataSize = 64` bytes** | Anti-bloat cap + two-phase fail-fast parallel `VerifyHeaders` |
 | **Total Max Supply** | **100,000,000 ROGUE** | Exact mathematical hard cap across 32 halving eras (zero tail emission) |
 | **Initial Block Reward**| **25 ROGUE** | Halves every 2,000,000 blocks (~1.90 years at 30s/block) |
@@ -162,7 +162,13 @@ $$\text{Reward} = \left\lfloor \frac{25 \times 10^{18}}{2^{\text{Era}}} \right\r
   - Registered `"800055": "rogue-signal"` in network names.
   - Updated chain banner to display: `Consensus: RandomX rx/0 (proof-of-work, ASIC-resistant)`.
 
-### 3. Backend & Engine Dispatch (`eth/`)
+### 3. Backend & Engine Dispatch (`eth/` & `miner/`)
+- **`eth/sync.go`**:
+  - Calibrated `artificialFinalitySafetyInterval = 30 * 30 * time.Second` (15 minutes), adapting MESS to Rogue Signal's 30s block cadence.
+- **`miner/worker.go` & `miner/miner.go`**:
+  - Suppresses preliminary empty block commit when TxPool is empty, avoiding CPU interruptions on RandomX.
+  - Atomically deduplicates sealing tasks by `sealhash` per block head.
+  - Default `miner.recommit` set to 10 seconds.
 - **`eth/ethconfig/config.go`**:
   - Added `RandomXFast bool` configuration flag.
   - Extended `CreateConsensusEngine` to instantiate `randomx.New(*randomxConfig)` when RandomX is specified.

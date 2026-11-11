@@ -254,7 +254,7 @@ MINER OPTIONS:
   --miner.gaslimit value              Target gas ceiling for mined blocks (default: 8000000)
   --miner.etherbase value             Public address for block mining rewards (default = first account) (default: "0")
   --miner.extradata value             Block extra data set by the miner (default = client version)
-  --miner.recommit value              Time interval to recreate the block being mined (default: 3s)
+  --miner.recommit value              Time interval to recreate the block being mined (default: 10s)
   --miner.noverify                    Disable remote sealing verification
 
 GAS PRICE ORACLE OPTIONS:
