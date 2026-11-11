@@ -27,7 +27,6 @@ import (
 	"github.com/ethereum/go-ethereum/eth/downloader"
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
 	"github.com/ethereum/go-ethereum/log"
-	"github.com/ethereum/go-ethereum/params/vars"
 )
 
 const (
@@ -44,7 +43,8 @@ var (
 	// artificialFinalitySafetyInterval defines the interval at which the local head is checked for staleness.
 	// If the head is found to be stale across this interval, artificial finality features are disabled.
 	// This prevents an abandoned victim of an eclipse attack from being forever destitute.
-	artificialFinalitySafetyInterval = time.Second * time.Duration(30*vars.DurationLimit.Uint64())
+	// Rogue Signal block target is 30s; 30 blocks * 30s = 900s (15 minutes).
+	artificialFinalitySafetyInterval = 30 * 30 * time.Second
 )
 
 // artificialFinalitySafetyLoop compares our local head across timer intervals.

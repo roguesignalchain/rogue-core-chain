@@ -247,6 +247,7 @@ type worker struct {
 
 	pendingMu    sync.RWMutex
 	pendingTasks map[common.Hash]*task
+	lastSealHash common.Hash // Deduplicate consecutive identical sealing requests
 
 	snapshotMu       sync.RWMutex // The lock used to protect the snapshots below
 	snapshotBlock    *types.Block
@@ -1315,7 +1316,14 @@ func (w *worker) commitWork(interrupt *atomic.Int32, noempty bool, timestamp int
 	}
 	// Create an empty block based on temporary copied state for
 	// sealing in advance without waiting block execution finished.
-	if !noempty && !w.noempty.Load() {
+	// Only pre-seal if there are pending transactions to execute concurrently;
+	// if txpool is empty, pre-sealing creates duplicate work and log noise.
+	hasPendingTxs := false
+	if w.eth != nil && w.eth.TxPool() != nil {
+		pending, _ := w.eth.TxPool().Stats()
+		hasPendingTxs = pending > 0
+	}
+	if !noempty && !w.noempty.Load() && hasPendingTxs {
 		w.commit(work.copy(), nil, false, start)
 	}
 	// Fill pending transactions from the txpool into the block.
@@ -1377,13 +1385,27 @@ func (w *worker) commit(env *environment, interval func(), update bool, start ti
 		}
 		// If we're post merge, just ignore
 		if !w.isTTDReached(block.Header()) {
+			sealhash := w.engine.SealHash(block.Header())
+
+			// Deduplicate consecutive identical sealing work
+			w.pendingMu.Lock()
+			if sealhash == w.lastSealHash {
+				w.pendingMu.Unlock()
+				if update {
+					w.updateSnapshot(env)
+				}
+				return nil
+			}
+			w.lastSealHash = sealhash
+			w.pendingMu.Unlock()
+
 			select {
 			case w.taskCh <- &task{receipts: env.receipts, state: env.state, block: block, createdAt: time.Now()}:
 				w.unconfirmed.Shift(block.NumberU64() - 1)
 
 				fees := totalFees(block, env.receipts)
 				feesInEther := new(big.Float).Quo(new(big.Float).SetInt(fees), big.NewFloat(vars.Ether))
-				log.Info("Commit new sealing work", "number", block.Number(), "sealhash", w.engine.SealHash(block.Header()),
+				log.Info("Commit new sealing work", "number", block.Number(), "sealhash", sealhash,
 					"uncles", len(env.uncles), "txs", env.tcount,
 					"gas", block.GasUsed(), "fees", feesInEther,
 					"elapsed", common.PrettyDuration(time.Since(start)))

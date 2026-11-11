@@ -65,11 +65,9 @@ var DefaultConfig = Config{
 	GasCeil:  60000000,
 	GasPrice: big.NewInt(vars.GWei),
 
-	// The default recommit time is chosen as two seconds since
-	// consensus-layer usually will wait a half slot of time(6s)
-	// for payload generation. It should be enough for Geth to
-	// run 3 rounds.
-	Recommit:          2 * time.Second,
+	// The default recommit time is 10s for Rogue Signal (30s block time)
+	// to avoid excessive CPU interruptions in RandomX sealing work.
+	Recommit:          10 * time.Second,
 	NewPayloadTimeout: 2 * time.Second,
 }
 
