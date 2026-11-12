@@ -134,9 +134,8 @@ func (em *EpochManager) GetSeed(epoch uint64, chain consensus.ChainHeaderReader)
 }
 
 // ResolveSeedForHeader resolves the exact RandomX seed hash for a specific header by following
-// its ancestor chain when the seed block is within reorganization range (MaxReorgDepth + SeedLag).
-// Once a block is deeper than MaxReorgDepth + SeedLag past the seed block, the seed block is
-// finalized and resolved in O(1) via GetSeed.
+// its ancestor chain back to SeedBlockNumber(epoch). This guarantees that side-fork blocks across
+// epoch boundaries always use their own branch's seed block, avoiding consensus failures on reorgs.
 func (em *EpochManager) ResolveSeedForHeader(header *types.Header, chain consensus.ChainHeaderReader) (common.Hash, error) {
 	if header == nil {
 		return common.Hash{}, fmt.Errorf("nil header")
@@ -153,9 +152,9 @@ func (em *EpochManager) ResolveSeedForHeader(header *types.Header, chain consens
 		return header.Hash(), nil
 	}
 
-	// Within MaxReorgDepth + SeedLag (154 blocks) of seedNum, walk parent hashes directly to seedNum
-	// so side-fork blocks across epoch boundaries always use their own branch's seed block.
-	if blockNum > seedNum && (blockNum-seedNum) <= (MaxReorgDepth+SeedLag) {
+	// If blockNum > seedNum, walk parent hashes directly back to seedNum to ensure
+	// any competing side branch evaluates RandomX PoW against its own branch's seed.
+	if blockNum > seedNum {
 		currHash := header.ParentHash
 		currNum := blockNum - 1
 		for currNum >= seedNum {
@@ -260,17 +259,20 @@ func (em *EpochManager) getContextBySeed(epoch uint64, seed common.Hash) (*RxCon
 		}
 	}
 
-	// Bound total cached contexts to MaxCachedContexts
+	// Bound total cached contexts to MaxCachedContexts, ensuring we never evict the newly created seed
 	for len(em.contexts) > MaxCachedContexts {
 		var oldestSeed common.Hash
 		var lowestEpoch uint64 = ^uint64(0)
 		for s, ep := range em.contextEpochs {
+			if s == seed {
+				continue // Protect current context from being evicted
+			}
 			if ep < lowestEpoch {
 				lowestEpoch = ep
 				oldestSeed = s
 			}
 		}
-		if lowestEpoch == ^uint64(0) {
+		if lowestEpoch == ^uint64(0) || oldestSeed == (common.Hash{}) {
 			break
 		}
 		if staleCtx, ok := em.contexts[oldestSeed]; ok && staleCtx != nil {

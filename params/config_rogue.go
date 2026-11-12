@@ -61,6 +61,7 @@ var (
 
 		// Cancun (MCOPY, TSTORE/TLOAD opcodes)
 		EIP5656FBlock: big.NewInt(0),
+		EIP1153FBlock: big.NewInt(0),
 
 		// ECBP-1100 (MESS - Modified Exponential Subjective Scoring artificial finality)
 		ECBP1100FBlock: big.NewInt(0),

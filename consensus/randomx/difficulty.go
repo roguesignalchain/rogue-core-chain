@@ -21,8 +21,8 @@ const (
 	// MTPWindow is the number of ancestor blocks used to compute the Past Median Time (MTP-11).
 	MTPWindow = 11
 
-	// MaxFutureDrift is the maximum allowed future timestamp drift in seconds (15 seconds).
-	MaxFutureDrift = 15
+	// MaxFutureDrift is the maximum allowed future timestamp drift in seconds (30 seconds / one full block).
+	MaxFutureDrift = 30
 
 	// MaxClampUpFactor is the maximum multiplier for difficulty increase per block (133%).
 	MaxClampUpFactor = 133
@@ -233,7 +233,7 @@ func CalculateMTP11(chain consensus.ChainHeaderReader, parent *types.Header) uin
 
 // VerifyHeaderTime checks that:
 // 1. Header.Time > MTP11(parent)
-// 2. Header.Time <= now + MaxFutureDrift (15 seconds)
+// 2. Header.Time <= now + MaxFutureDrift (30 seconds)
 func VerifyHeaderTime(chain consensus.ChainHeaderReader, header *types.Header, parent *types.Header, now uint64) error {
 	mtp := CalculateMTP11(chain, parent)
 	if header.Time <= mtp {

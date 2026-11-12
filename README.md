@@ -65,7 +65,7 @@
 | **Seed Rotation** | **Every 2048 blocks (~17.07h)** | Rotates RandomX VM key every 2048 blocks with canonical reorg validation |
 | **Seed Lag** | **64 blocks (~32m)** | Next epoch seed is locked 64 blocks early (`runtime.NumCPU()/2` precompute) |
 | **Cache Retention** | **128 blocks (~64m)** | Retains previous epoch cache in RAM to validate chain reorganizations |
-| **Genesis Block Hash** | `0xc6f7f29d6a23f1921f3e514401a82a60ffa1f21885497dbf6414e8bb2f22b91d` | Anchored in `RequireBlockHashes[0]` |
+| **Genesis Block Hash** | `0xf30f172028b07950de58d2cb4d65593793c183fcd0f86c9c24c5d4a037b490b7` | Anchored in `RequireBlockHashes[0]` |
 | **SealHash Format** | RLP(Header without Nonce & MixDigest) | Canonical Ethereum RLP serialization excluding mutable seal fields |
 | **MixDigest** | 32-byte RandomX hash | Direct PoW inclusion proof stored in header |
 | **Default P2P Port** | **`38888`** | Dedicated port avoiding Ethereum/ETC discovery collisions |

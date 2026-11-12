@@ -33,7 +33,8 @@ if (-not (Test-Path (Join-Path $RandomxSrc "CMakeLists.txt"))) {
 
 New-Item -ItemType Directory -Force -Path $RandomxBuild | Out-Null
 Set-Location $RandomxBuild
-cmake -G "MinGW Makefiles" -DARCH=native -DCMAKE_BUILD_TYPE=Release ..
+$RxArch = if ($env:NATIVE -eq "1") { "native" } else { "default" }
+cmake -G "MinGW Makefiles" -DARCH=$RxArch -DCMAKE_BUILD_TYPE=Release ..
 mingw32-make
 
 $LibDest = Join-Path $CoreDir "consensus\randomx\lib"

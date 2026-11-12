@@ -152,6 +152,9 @@ func (miner *Miner) update() {
 				if shouldStart {
 					miner.worker.start()
 				}
+				// Unsubscribe from downloader events to prevent malicious peers from pausing
+				// the miner with unverified sync start announcements (upstream standard anti-DoS).
+				events.Unsubscribe()
 			}
 		case <-miner.startCh:
 			if canStart {

@@ -20,9 +20,10 @@ func TestBlockRewardHalving(t *testing.T) {
 		t.Errorf("Block 1 reward mismatch: expected %v, got %v", twentyFiveROGUE, r)
 	}
 
-	// Era 0: last block
-	if r := CalculateBlockReward(HalvingInterval); r.Cmp(twentyFiveROGUE) != 0 {
-		t.Errorf("Block %d reward mismatch: expected %v, got %v", HalvingInterval, twentyFiveROGUE, r)
+	// Era 0: last block (includes EraRemainderWei)
+	expectedEra0End := new(big.Int).Add(twentyFiveROGUE, EraRemainderWei)
+	if r := CalculateBlockReward(HalvingInterval); r.Cmp(expectedEra0End) != 0 {
+		t.Errorf("Block %d reward mismatch: expected %v, got %v", HalvingInterval, expectedEra0End, r)
 	}
 
 	// Era 1: first block
@@ -64,19 +65,20 @@ func TestSplitReward(t *testing.T) {
 }
 
 func TestMaxSupplyCapCompliance(t *testing.T) {
-	// Calculate theoretical maximum supply across all 32 eras:
-	// Sum_{era=0}^{31} (HalvingInterval * (25 / 2^era))
+	// Calculate exact total supply across all 32 eras:
+	// Sum_{era=0}^{31} ((HalvingInterval-1) * (25 / 2^era) + (25 / 2^era + EraRemainderWei))
 	total := new(big.Int)
 	for era := uint64(0); era < MaxHalvingEras; era++ {
 		reward := new(big.Int).Rsh(InitialBaseReward, uint(era))
 		eraTotal := new(big.Int).Mul(big.NewInt(int64(HalvingInterval)), reward)
+		eraTotal.Add(eraTotal, EraRemainderWei)
 		total.Add(total, eraTotal)
 	}
 
-	if total.Cmp(MaxSupplyCap) > 0 {
-		t.Fatalf("Total emission %v exceeds maximum supply cap of %v", total, MaxSupplyCap)
+	if total.Cmp(MaxSupplyCap) != 0 {
+		t.Fatalf("Total emission %v does not equal exact maximum supply cap of %v (diff: %v)", total, MaxSupplyCap, new(big.Int).Sub(MaxSupplyCap, total))
 	}
 
-	// Check that total converges to 100,000,000 ROGUE (25 * 2,000,000 * 2 = 100,000,000 ROGUE)
-	t.Logf("Total calculated max supply over 32 eras: %s ROGUE", new(big.Int).Div(total, WeiPerROGUE).String())
+	// Verify exact convergence to 100,000,000.000000000000000000 ROGUE
+	t.Logf("Total calculated max supply over 32 eras: %s Wei (exactly 100,000,000 ROGUE)", total.String())
 }

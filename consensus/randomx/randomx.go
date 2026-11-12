@@ -534,6 +534,15 @@ func (rx *RandomX) VerifySeal(chain consensus.ChainHeaderReader, header *types.H
 		return nil // Genesis
 	}
 
+	// Fast pre-check: verify MixDigest meets the difficulty target before spending
+	// heavy CPU cycles computing the CGo RandomX hash. If MixDigest > Target, it is impossible
+	// for this seal to be valid regardless of the hash calculation.
+	target := DifficultyToTarget(header.Difficulty)
+	mixNum := HashToBig(header.MixDigest)
+	if mixNum.Cmp(target) > 0 {
+		return ErrInvalidPoW
+	}
+
 	ctx, err := rx.epochs.GetContextForHeader(header, chain)
 	if err != nil {
 		return fmt.Errorf("failed to get RandomX context for block %d: %w", number, err)
@@ -553,7 +562,6 @@ func (rx *RandomX) VerifySeal(chain consensus.ChainHeaderReader, header *types.H
 	}
 
 	// Verify PoW difficulty target: HashToBig(rxHash) <= Target
-	target := DifficultyToTarget(header.Difficulty)
 	hashNum := HashToBig(rxHash)
 	if hashNum.Cmp(target) > 0 {
 		return ErrInvalidPoW

@@ -16,14 +16,21 @@ RANDOMX_SRC = ./consensus/randomx/randomx-src
 randomx: librandomx
 librandomx: $(RANDOMX_LIB)
 
+# Architecture selection: default for universal binary portability (SIGILL safe), or native for local tuning
+ifeq ($(NATIVE),1)
+	RX_ARCH ?= native
+else
+	RX_ARCH ?= default
+endif
+
 $(RANDOMX_LIB):
 	@if [ ! -f "$(RANDOMX_SRC)/CMakeLists.txt" ]; then \
 		echo "Initializing RandomX submodule..."; \
 		git submodule update --init --recursive consensus/randomx/randomx-src; \
 	fi
-	@echo "Building RandomX static library..."
+	@echo "Building RandomX static library (ARCH=$(RX_ARCH))..."
 	@mkdir -p $(RANDOMX_SRC)/build
-	@cd $(RANDOMX_SRC)/build && cmake -DARCH=native -DCMAKE_BUILD_TYPE=Release .. && $(MAKE)
+	@cd $(RANDOMX_SRC)/build && cmake -DARCH=$(RX_ARCH) -DCMAKE_BUILD_TYPE=Release .. && $(MAKE)
 	@mkdir -p ./consensus/randomx/lib
 	@cp $(RANDOMX_SRC)/build/librandomx.a $(RANDOMX_LIB)
 	@echo "RandomX static library successfully built: $(RANDOMX_LIB)"

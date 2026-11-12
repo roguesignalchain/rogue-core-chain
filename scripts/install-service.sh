@@ -104,7 +104,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=${BIN_SRC} --rogue --datadir ${DATADIR} --http --http.addr 127.0.0.1 --http.port 38849 --http.api eth,net,web3,randomx --port 38890 --nat any --syncmode full --cache 512 ${EXTRA_ARGS}
+ExecStart=${BIN_SRC} --rogue --datadir ${DATADIR} --http --http.addr 127.0.0.1 --http.port 38845 --http.api eth,net,web3,rogue --port 38888 --nat any --syncmode full --cache 256 ${EXTRA_ARGS}
 Restart=always
 RestartSec=5s
 KillSignal=SIGTERM
@@ -141,7 +141,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=${SERVICE_USER}
-ExecStart=${BIN_SRC} --rogue --datadir ${DATADIR} --http --http.addr 127.0.0.1 --http.port 38849 --http.api eth,net,web3,randomx --port 38890 --nat any --syncmode full --cache 512 ${EXTRA_ARGS}
+ExecStart=${BIN_SRC} --rogue --datadir ${DATADIR} --http --http.addr 127.0.0.1 --http.port 38845 --http.api eth,net,web3,rogue --port 38888 --nat any --syncmode full --cache 256 ${EXTRA_ARGS}
 Restart=always
 RestartSec=5s
 LimitNOFILE=65535

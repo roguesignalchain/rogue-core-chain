@@ -191,23 +191,29 @@ This command dumps out the state for a given block (or latest, if none provided)
 // initGenesis will initialise the given JSON format genesis file and writes it as
 // the zero'd block (i.e. genesis) or will fail hard if it can't succeed.
 func initGenesis(ctx *cli.Context) error {
-	if ctx.Args().Len() != 1 {
-		utils.Fatalf("need genesis.json file as the only argument")
-	}
-	genesisPath := ctx.Args().First()
-	if len(genesisPath) == 0 {
-		utils.Fatalf("invalid path to genesis file")
-	}
+	var genesis *genesisT.Genesis
 
-	genesis := new(genesisT.Genesis)
-	bs, err := os.ReadFile(genesisPath)
-	if err != nil {
-		utils.Fatalf("Failed to read genesis file: %v", err)
-	}
+	if ctx.Args().Len() == 0 && ctx.Bool(utils.RogueFlag.Name) {
+		// Zero-friction headless/interactive init for Rogue Signal
+		genesis = params.DefaultRogueGenesisBlock()
+	} else if ctx.Args().Len() == 1 {
+		genesisPath := ctx.Args().First()
+		if len(genesisPath) == 0 {
+			utils.Fatalf("invalid path to genesis file")
+		}
 
-	err = genesis.UnmarshalJSON(bs)
-	if err != nil {
-		utils.Fatalf("invalid genesis file: %v", err)
+		genesis = new(genesisT.Genesis)
+		bs, err := os.ReadFile(genesisPath)
+		if err != nil {
+			utils.Fatalf("Failed to read genesis file: %v", err)
+		}
+
+		err = genesis.UnmarshalJSON(bs)
+		if err != nil {
+			utils.Fatalf("invalid genesis file: %v", err)
+		}
+	} else {
+		utils.Fatalf("need genesis.json file as the only argument (or run with --rogue without arguments)")
 	}
 	// Open and initialise both full and light databases
 	stack, _ := makeConfigNode(ctx)

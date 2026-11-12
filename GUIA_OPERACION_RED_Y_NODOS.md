@@ -29,7 +29,7 @@ Antes de iniciar cualquier proceso, se verificó el estado del entorno:
 | **Reglas de Tiempo** | MTP-11 estricto | Límite de desvío futuro de 15 segundos |
 | **Finalidad Anti-51%** | `MaxReorgDepth = 90` + MESS | Límite duro de 90 bloques (~45m) + gravedad polinómica ECBP-1100 |
 | **Rotación de Semilla** | Cada 2048 bloques (~17.07h) | Semilla RandomX con lag de 64 bloques (~32m) |
-| **Hash Bloque Génesis** | `0xc6f7f29d6a23f1921f3e514401a82a60ffa1f21885497dbf6414e8bb2f22b91d` | Anclado en `RequireBlockHashes[0]` |
+| **Hash Bloque Génesis** | `0xf30f172028b07950de58d2cb4d65593793c183fcd0f86c9c24c5d4a037b490b7` | Anclado en `RequireBlockHashes[0]` |
 | **Puerto P2P por defecto** | `38888` | Protocolo devp2p eth/68 |
 | **Puerto HTTP RPC** | `38845` | API JSON-RPC |
 | **Puerto WS RPC** | `38846` | WebSocket JSON-RPC |

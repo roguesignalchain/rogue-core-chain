@@ -410,7 +410,7 @@ func (m *mockRogueHeaderReader) GetTd(hash common.Hash, number uint64) *big.Int 
 	return m.tds[hash]
 }
 
-func TestRogueMaxReorgDepthFinality(t *testing.T) {
+func TestRogueMESSFinality(t *testing.T) {
 	reader := &mockRogueHeaderReader{
 		headers: make(map[common.Hash]*types.Header),
 		tds:     make(map[common.Hash]*big.Int),
@@ -422,7 +422,7 @@ func TestRogueMaxReorgDepthFinality(t *testing.T) {
 
 	// Build canonical chain of 100 blocks
 	curr := genesis
-	var block50, block90 *types.Header
+	var block90 *types.Header
 	for i := int64(1); i <= 100; i++ {
 		h := &types.Header{
 			ParentHash: curr.Hash(),
@@ -433,9 +433,6 @@ func TestRogueMaxReorgDepthFinality(t *testing.T) {
 		}
 		reader.headers[h.Hash()] = h
 		reader.tds[h.Hash()] = new(big.Int).Add(reader.tds[curr.Hash()], h.Difficulty)
-		if i == 50 {
-			block50 = h
-		}
 		if i == 90 {
 			block90 = h
 		}
@@ -445,7 +442,7 @@ func TestRogueMaxReorgDepthFinality(t *testing.T) {
 
 	fc := NewForkChoice(reader, nil)
 
-	// 1. Fork from block 90 (reorg depth = 100 - 90 = 10 <= 90) with higher TD -> Allowed
+	// Shallow fork from block 90 (10 blocks) with higher TD -> Allowed by fork choice
 	forkShallow := block90
 	for i := int64(91); i <= 101; i++ {
 		h := &types.Header{
@@ -464,51 +461,6 @@ func TestRogueMaxReorgDepthFinality(t *testing.T) {
 		t.Fatalf("ReorgNeeded returned unexpected error: %v", err)
 	}
 	if !allowed {
-		t.Error("Expected shallow reorg (depth 10 <= 90) with higher TD to be allowed")
+		t.Error("Expected shallow reorg with higher TD to be allowed")
 	}
-
-	// 2. Fork from block 0 (reorg depth = 100 > 90) even with 10x higher TD -> Rejected
-	forkDeep := genesis
-	for i := int64(1); i <= 105; i++ {
-		h := &types.Header{
-			ParentHash: forkDeep.Hash(),
-			Number:     big.NewInt(i),
-			Time:       forkDeep.Time + 30,
-			Difficulty: big.NewInt(1000),
-			Extra:      []byte("deep-51-attack"),
-		}
-		reader.headers[h.Hash()] = h
-		reader.tds[h.Hash()] = new(big.Int).Add(reader.tds[forkDeep.Hash()], h.Difficulty)
-		forkDeep = h
-	}
-	allowedDeep, err := fc.ReorgNeeded(canonHead, forkDeep)
-	if err != nil {
-		t.Fatalf("ReorgNeeded returned unexpected error on deep reorg: %v", err)
-	}
-	if allowedDeep {
-		t.Error("Expected deep reorg (depth 100 > MaxRogueReorgDepth 90) to be rejected")
-	}
-
-	// 3. Initial sync / long-offline recovery (extern.Time > current.Time + 24h and extern.Number > current.Number + 90) -> Allowed
-	forkSyncRecovery := forkDeep
-	for i := int64(106); i <= 200; i++ {
-		h := &types.Header{
-			ParentHash: forkSyncRecovery.Hash(),
-			Number:     big.NewInt(i),
-			Time:       canonHead.Time + MaxRogueSyncStaleAge + uint64(i*30),
-			Difficulty: big.NewInt(50000),
-			Extra:      []byte("canonical-network-sync"),
-		}
-		reader.headers[h.Hash()] = h
-		reader.tds[h.Hash()] = new(big.Int).Add(reader.tds[forkSyncRecovery.Hash()], h.Difficulty)
-		forkSyncRecovery = h
-	}
-	allowedSyncRecovery, err := fc.ReorgNeeded(canonHead, forkSyncRecovery)
-	if err != nil {
-		t.Fatalf("ReorgNeeded returned unexpected error on sync recovery: %v", err)
-	}
-	if !allowedSyncRecovery {
-		t.Error("Expected initial-sync/stale-head recovery (>24h and >90 blocks ahead) to be allowed")
-	}
-	_ = block50
 }

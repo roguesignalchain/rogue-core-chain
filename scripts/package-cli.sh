@@ -59,7 +59,7 @@ QUICK START:
    ./bin/core-rogue --rogue --datadir ~/.local/share/rogue-signal/chaindata init ./config/genesis.json
 
 2. Run node:
-   ./bin/core-rogue --rogue --datadir ~/.local/share/rogue-signal/chaindata --http --http.addr 127.0.0.1 --http.port 38849 --http.api eth,net,web3,rogue --port 38890
+   ./bin/core-rogue --rogue --datadir ~/.local/share/rogue-signal/chaindata --http --http.addr 127.0.0.1 --http.port 38845 --http.api eth,net,web3,rogue --port 38888
 
 3. Automated systemd service installation:
    ./scripts/install-service.sh --user

@@ -73,7 +73,7 @@ var Defaults = Config{
 	StateHistory:       vars.FullImmutabilityThreshold,
 	LightPeers:         100,
 	UltraLightFraction: 75,
-	DatabaseCache:      512,
+	DatabaseCache:      256,
 	TrieCleanCache:     154,
 	TrieDirtyCache:     256,
 	TrieTimeout:        60 * time.Minute,
@@ -83,6 +83,8 @@ var Defaults = Config{
 	TxPool: func() legacypool.Config {
 		cfg := legacypool.DefaultConfig
 		cfg.PriceLimit = vars.GWei
+		cfg.AccountQueue = 30
+		cfg.AccountSlots = 30
 		return cfg
 	}(),
 	BlobPool: blobpool.DefaultConfig,

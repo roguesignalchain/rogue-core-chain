@@ -89,44 +89,34 @@ func TestIncrementMinerBlockCount(t *testing.T) {
 	}
 }
 
-type mockGamificationChain struct {
-	headersByNum map[uint64]*types.Header
-	current       *types.Header
+type mockGamificationStateChain struct {
+	state *state.StateDB
 }
 
-func (m *mockGamificationChain) Config() ctypes.ChainConfigurator { return nil }
-func (m *mockGamificationChain) CurrentHeader() *types.Header      { return m.current }
-func (m *mockGamificationChain) GetHeader(hash common.Hash, number uint64) *types.Header {
-	return m.headersByNum[number]
+func (m *mockGamificationStateChain) Config() ctypes.ChainConfigurator { return nil }
+func (m *mockGamificationStateChain) CurrentHeader() *types.Header      { return nil }
+func (m *mockGamificationStateChain) GetHeader(hash common.Hash, number uint64) *types.Header {
+	return nil
 }
-func (m *mockGamificationChain) GetHeaderByNumber(number uint64) *types.Header {
-	return m.headersByNum[number]
-}
-func (m *mockGamificationChain) GetHeaderByHash(hash common.Hash) *types.Header { return nil }
-func (m *mockGamificationChain) GetTd(hash common.Hash, number uint64) *big.Int  { return nil }
+func (m *mockGamificationStateChain) GetHeaderByNumber(number uint64) *types.Header { return nil }
+func (m *mockGamificationStateChain) GetHeaderByHash(hash common.Hash) *types.Header { return nil }
+func (m *mockGamificationStateChain) GetTd(hash common.Hash, number uint64) *big.Int  { return nil }
+func (m *mockGamificationStateChain) State() (*state.StateDB, error)                  { return m.state, nil }
 
-func TestGetMinerStatsFallback(t *testing.T) {
+func TestGetMinerStatsFromState(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	sdb := state.NewDatabase(db)
+	st, err := state.New(common.Hash{}, sdb, nil)
+	if err != nil {
+		t.Fatalf("failed to create state: %v", err)
+	}
+
 	miner := common.HexToAddress("0x0544802665bc7c22124348e745a7abaa8420e197")
-	other := common.HexToAddress("0x70b2656c4dd9556a6243f9f5de1b07d000000000")
-
-	chain := &mockGamificationChain{
-		headersByNum: make(map[uint64]*types.Header),
+	for i := 0; i < 5; i++ {
+		IncrementMinerBlockCount(st, miner)
 	}
 
-	// Blocks: #1-#4 other, #5 miner, #6-#7 other, #8-#11 miner (5 blocks total)
-	for i := uint64(1); i <= 11; i++ {
-		coinbase := other
-		if i == 5 || i >= 8 {
-			coinbase = miner
-		}
-		h := &types.Header{
-			Number:   big.NewInt(int64(i)),
-			Coinbase: coinbase,
-		}
-		chain.headersByNum[i] = h
-		chain.current = h
-	}
-
+	chain := &mockGamificationStateChain{state: st}
 	api := &RogueAPI{chain: chain}
 	stats, err := api.GetMinerStats(miner)
 	if err != nil {

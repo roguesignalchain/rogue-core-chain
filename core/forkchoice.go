@@ -29,17 +29,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
-	"github.com/ethereum/go-ethereum/params/types/ctypes"
 )
-
-// MaxRogueReorgDepth is the maximum allowed chain reorganization depth on Rogue Signal (90 blocks = ~45 minutes at 30s/block).
-const MaxRogueReorgDepth = uint64(90)
-
-// MaxRogueSyncStaleAge is the age threshold (24 hours) beyond which a stalled local head
-// during initial sync or long offline recovery is permitted to reorg onto the canonical chain.
-// Because VerifyHeaderTime strictly forbids timestamps >15s in the future, a live 51% attacker
-// can never satisfy extern.Time > current.Time + MaxRogueSyncStaleAge against an active node.
-const MaxRogueSyncStaleAge = uint64(24 * 60 * 60)
 
 // ForkChoice is the fork chooser based on the highest total difficulty of the
 // chain(the fork choice used in the eth1) and the external fork choice (the fork
@@ -164,32 +154,6 @@ func (f *ForkChoice) ReorgNeeded(current *types.Header, extern *types.Header) (b
 	// otherwise be indicated.
 	if !reorg {
 		return reorg, nil
-	}
-
-	// Enforce hard MaxRogueReorgDepth (90 blocks) finality cap for RandomX (Rogue Signal) consensus
-	if f.chain.Config() != nil && f.chain.Config().GetConsensusEngineType() == ctypes.ConsensusEngineT_RandomX {
-		commonHeader, err := f.CommonAncestor(current, extern)
-		if err != nil {
-			return false, err
-		}
-		if current.Number.Uint64() > commonHeader.Number.Uint64() {
-			reorgDepth := current.Number.Uint64() - commonHeader.Number.Uint64()
-			isInitialSyncRecovery := extern.Time > current.Time+MaxRogueSyncStaleAge &&
-				extern.Number.Uint64() > current.Number.Uint64()+MaxRogueReorgDepth
-			if reorgDepth > MaxRogueReorgDepth && !isInitialSyncRecovery {
-				log.Warn("Reorg rejected: exceeds MaxReorgDepth finality threshold",
-					"depth", reorgDepth,
-					"maxAllowed", MaxRogueReorgDepth,
-					"common.bno", commonHeader.Number.Uint64(),
-					"common.hash", commonHeader.Hash(),
-					"current.bno", current.Number.Uint64(),
-					"current.hash", current.Hash(),
-					"proposed.bno", extern.Number.Uint64(),
-					"proposed.hash", extern.Hash(),
-				)
-				return false, nil
-			}
-		}
 	}
 
 	if bc, ok := f.chain.(*BlockChain); ok {

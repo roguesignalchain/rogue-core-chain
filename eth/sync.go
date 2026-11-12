@@ -31,7 +31,7 @@ import (
 
 const (
 	forceSyncCycle      = 10 * time.Second // Time interval to force syncs, even if few peers are available
-	defaultMinSyncPeers = 1                // Amount of peers desired to start syncing (immediate sync for Rogue Signal)
+	defaultMinSyncPeers = 3                // Amount of peers desired to start syncing (mitigates eclipse attacks on startup)
 )
 
 var (

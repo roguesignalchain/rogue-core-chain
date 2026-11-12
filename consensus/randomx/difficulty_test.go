@@ -182,10 +182,10 @@ func TestMTP11StrictValidation(t *testing.T) {
 		t.Errorf("Expected ErrOlderBlockTime, got %v", err)
 	}
 
-	// Too far in future (> 15 seconds)
+	// Too far in future (> 30 seconds MaxFutureDrift)
 	futureHeader := &types.Header{
 		Number:     big.NewInt(16),
-		Time:       now + 20,
+		Time:       now + 35,
 		ParentHash: parent.Hash(),
 	}
 	if err := VerifyHeaderTime(chain, futureHeader, parent, now); err != consensus.ErrFutureBlock {

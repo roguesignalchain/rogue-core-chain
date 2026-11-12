@@ -36,6 +36,12 @@ var (
 	// MaxSupplyCap is 100,000,000 ROGUE in wei (25 * 2,000,000 * 2 = 100,000,000 ROGUE exact geometric limit).
 	MaxSupplyCap = new(big.Int).Mul(big.NewInt(100000000), WeiPerROGUE)
 
+	// EraRemainderWei is the exact fractional remainder (727,595,761,750,000 wei) added to the final
+	// block of each halving era so that the cumulative emission across all 32 eras equals exactly
+	// 100,000,000.000000000000000000 ROGUE (zero truncation loss).
+	// Total remainder across 32 eras: 32 * 727,595,761,750,000 = 23,283,064,376,000,000 wei = 0.023283064376 ROGUE.
+	EraRemainderWei = big.NewInt(727595761750000)
+
 	// DefaultTreasuryAddress is the default protocol treasury address for Rogue Signal.
 	DefaultTreasuryAddress = common.HexToAddress("0xe9aaE535B7971A9AC8C6af0e4B524D02260D3a03")
 )
@@ -47,7 +53,9 @@ var (
 //   - Era 1 (blocks 2,000,001 .. 4,000,000): 12.5 ROGUE
 //   - Era 2 (blocks 4,000,001 .. 6,000,000): 6.25 ROGUE
 //   - Halves every 2,000,000 blocks (~1.90 years at 30s/block).
-//   - After era 32 (or if reward shifts to 0), returns 0 (Strict 100M Cap).
+//   - In the final block of each era (blockNumber % 2,000,000 == 0), EraRemainderWei is added
+//     to compensate for integer bit-shift truncation and ensure exact 100,000,000 ROGUE hard cap.
+//   - After era 32 (blockNumber > 64,000,000), returns 0 (Strict 100M Cap reached).
 func CalculateBlockReward(blockNumber uint64) *big.Int {
 	if blockNumber == 0 {
 		return big.NewInt(0) // Genesis block has 0 reward
@@ -59,6 +67,10 @@ func CalculateBlockReward(blockNumber uint64) *big.Int {
 	}
 
 	reward := new(big.Int).Rsh(InitialBaseReward, uint(era))
+	// Compensate bit-shift truncation in the final block of each halving era
+	if blockNumber%HalvingInterval == 0 {
+		reward.Add(reward, EraRemainderWei)
+	}
 	return reward
 }
 

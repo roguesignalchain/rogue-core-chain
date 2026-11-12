@@ -238,30 +238,6 @@ func (api *RogueAPI) GetMinerStats(address common.Address) (MinerStats, error) {
 		blocks = GetMinerBlockCount(st, address)
 	}
 
-	// Canonical header fallback: if StateDB reports 0 blocks (e.g. historical blocks
-	// mined prior to StateDB persistence fix), scan canonical headers to reflect real progress.
-	if blocks == 0 && api.chain != nil && api.chain.CurrentHeader() != nil {
-		currentNum := api.chain.CurrentHeader().Number.Uint64()
-		maxScan := uint64(50000)
-		start := uint64(1)
-		if currentNum > maxScan {
-			start = currentNum - maxScan
-		}
-		var scanned uint64
-		for n := currentNum; n >= start; n-- {
-			hdr := api.chain.GetHeaderByNumber(n)
-			if hdr == nil {
-				break
-			}
-			if hdr.Coinbase == address {
-				scanned++
-			}
-		}
-		if scanned > blocks {
-			blocks = scanned
-		}
-	}
-
 	return CalculateMinerStats(address, blocks), nil
 }
 

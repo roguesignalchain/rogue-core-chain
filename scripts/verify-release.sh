@@ -37,9 +37,19 @@ if [ ! -f "${CORE_DIR}/build/bin/core-rogue" ]; then
     "${SCRIPT_DIR}/build-core.sh"
 fi
 
-# 3. Verify sidecar
+# 3. Code Sanity and Test Verification
+echo "3. Running code sanity checks and test suite..."
+echo "-> go vet ./consensus/randomx/..."
+(cd "${CORE_DIR}" && go vet ./consensus/randomx/...)
+echo "-> go test -race ./consensus/randomx/..."
+(cd "${CORE_DIR}" && go test -race -count=1 ./consensus/randomx/)
+echo "-> go test genesis & MESS in ./core/..."
+(cd "${CORE_DIR}" && go test -count=1 ./core/ -run 'TestRogueGenesisBlockAndFinality|TestRogueGenesisJSON|TestRogueMESSFinality')
+echo "-> Test suite passed."
+
+# 4. Verify sidecar
 if [ -d "${WORKSPACE_ROOT}/rogue-desktop-client" ]; then
-    echo "3. Checking Tauri sidecar..."
+    echo "4. Checking Tauri sidecar..."
     TARGET_TRIPLE="$(rustc -vV 2>/dev/null | sed -n 's|host: ||p' || true)"
     if [ -n "${TARGET_TRIPLE}" ]; then
         SIDECAR="${WORKSPACE_ROOT}/rogue-desktop-client/src-tauri/bin/core-rogue-${TARGET_TRIPLE}"
@@ -51,8 +61,8 @@ if [ -d "${WORKSPACE_ROOT}/rogue-desktop-client" ]; then
     fi
 fi
 
-# 4. Check git status across repositories and scan for secret leaks
-echo "4. Checking git working tree cleanliness and secret absence..."
+# 5. Check git status across repositories and scan for secret leaks
+echo "5. Checking git working tree cleanliness and secret absence..."
 if [ -d "${CORE_DIR}/.git" ]; then
     echo "-> Status in rogue-core-chain:"
     DIRTY_CORE="$(git -C "${CORE_DIR}" status --porcelain)"
