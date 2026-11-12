@@ -19,15 +19,16 @@ Antes de iniciar cualquier proceso, se verificó el estado del entorno:
 | **Ticker** | `ROGUE` | Moneda nativa con 18 decimales |
 | **Chain ID** | `800055` | Identificador único EVM (EIP-155) |
 | **Algoritmo PoW** | `RandomX` (`rx/0`) | Minería resistente a ASICs/GPUs exclusiva para CPU casera |
-| **Modo de Memoria** | `Light Mode (~256 MB)` | Por defecto siempre; opción `Fast Mode (~2.08 GB)` |
+| **Modo de Memoria** | `Light Mode (~256 MB)` | Por defecto siempre; `Fast Mode (~2.08 GB)` solo con `--mine --randomx.fast` |
+| **Pool de VMs RandomX** | `runtime.NumCPU() + 2` | Canal acotado sin GC churn, prewarm paralelo y refcounting atómico |
 | **Tiempo de Bloque** | 30 segundos | Frecuencia objetivo de emisión con `< 0.5%` de bloques huérfanos |
 | **Emisión por Bloque** | 25 ROGUE | Halving cada 2,000,000 bloques (~1.90 años) |
 | **Reparto de Minado** | 95% Minero / 5% Tesorería | 23.75 ROGUE al minero (+ 100% comisiones), 1.25 ROGUE a la tesorería |
 | **Billetera Tesorería**| `0xe9aaE535B7971A9AC8C6af0e4B524D02260D3a03` | Recibe el 5% en cada bloque |
 | **Suministro Máximo** | 100,000,000 ROGUE | Hard cap matemático exacto en 32 eras ($25 \times 2\text{M} \times 2$), sin emisión de cola |
 | **Dificultad (DAA)** | LWMA-1 ($N=60$) | Ajuste lineal ponderado por bloque (~30 min, $\pm 33\%$ clamp) |
-| **Reglas de Tiempo** | MTP-11 estricto | Límite de desvío futuro de 15 segundos |
-| **Finalidad Anti-51%** | `MaxReorgDepth = 90` + MESS | Límite duro de 90 bloques (~45m) + gravedad polinómica ECBP-1100 |
+| **Reglas de Tiempo** | MTP-11 estricto | Límite de desvío futuro de 30 segundos |
+| **Finalidad Anti-51%** | `ECBP-1100 (MESS)` desde Bloque 0 | Gravedad polinómica ECBP-1100 (hasta $31\times$ TD, intervalo 15m) + desempate anti-selfish |
 | **Rotación de Semilla** | Cada 2048 bloques (~17.07h) | Semilla RandomX con lag de 64 bloques (~32m) |
 | **Hash Bloque Génesis** | `0xf30f172028b07950de58d2cb4d65593793c183fcd0f86c9c24c5d4a037b490b7` | Anclado en `RequireBlockHashes[0]` |
 | **Puerto P2P por defecto** | `38888` | Protocolo devp2p eth/68 |

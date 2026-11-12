@@ -1991,6 +1991,9 @@ func (s *TransactionAPI) SendRawTransaction(ctx context.Context, input hexutil.B
 	if err := tx.UnmarshalBinary(input); err != nil {
 		return common.Hash{}, err
 	}
+	if cfg := s.b.ChainConfig(); cfg != nil && cfg.GetConsensusEngineType().IsRandomX() && tx.Type() != types.LegacyTxType {
+		return common.Hash{}, fmt.Errorf("transaction type %d not supported on Rogue Signal: only legacy (type 0) transactions accepted", tx.Type())
+	}
 	return SubmitTransaction(ctx, s.b, tx)
 }
 

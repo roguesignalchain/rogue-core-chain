@@ -85,6 +85,8 @@ var Defaults = Config{
 		cfg.PriceLimit = vars.GWei
 		cfg.AccountQueue = 30
 		cfg.AccountSlots = 30
+		cfg.GlobalSlots = 3072 // 3072 + 1024 = 4096 slots * 32KB = 128 MB max RAM cap
+		cfg.GlobalQueue = 1024
 		return cfg
 	}(),
 	BlobPool: blobpool.DefaultConfig,
@@ -254,8 +256,6 @@ func CreateConsensusEngine(stack *node.Node, ethashConfig *ethash.Config, clique
 		engine = lyra2.New(lyra2Config, notify, noverify)
 	} else if randomxConfig != nil {
 		cfg := *randomxConfig
-		cfg.NotifyURLs = notify
-		cfg.NoVerify = noverify
 		rxEngine := randomx.New(cfg)
 		rxEngine.SetThreads(-1) // Disable CPU mining by default until explicitly enabled
 		engine = rxEngine

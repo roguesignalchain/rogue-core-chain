@@ -48,14 +48,15 @@
 | **Chain ID** | **`800055`** | Strict EIP-155 replay protection active from block 0 |
 | **Mining Algorithm**| **RandomX (`rx/0`)** | Native ASIC/GPU-resistant CPU Proof-of-Work |
 | **Default RAM Profile**| **Light Mode (~256 MB RAM)** | Default profile optimized for home computers and low-memory hardware |
-| **Optional RAM Profile**| **Fast Mode (~2.08 GB RAM)** | Activated via `--randomx.fast` or RPC `randomx_setFastMode` |
+| **Optional RAM Profile**| **Fast Mode (~2.08 GB RAM)** | Activated only when both `--mine` and `--randomx.fast` are enabled (otherwise Light Mode) |
+| **VM Pool Architecture** | **Elastic Bounded Channel (`NumCPU + 2`)** | Parallel `GOMAXPROCS` prewarm, zero GC churn, thread-local `AcquireVM`/`ReleaseVM`, lazy atomic refcounting |
 | **Block Target Time** | **30 seconds** | Low-orphan global cadence (`< 0.5%` orphan rate) without Uncles |
-| **Gas Limit** | **60,000,000** per block | High transaction bandwidth (`1 Gwei` min TxPool floor) |
+| **Gas Limit** | **50,000,000** per block | High transaction bandwidth (`1 Gwei` min TxPool floor, 128 MB TxPool RAM cap, legacy tx type 0 only) |
 | **Difficulty Algorithm** | **LWMA-1** ($N=60$) | Linear Weighted Moving Average (~30m window, candidate timestamp independent) |
 | **Target Clamping** | **$\pm 33\%$ per block** | Clamps adjustment to $[67\%, 133\%]$ to prevent hashrate shock attacks |
 | **Genesis Difficulty** | `0x10000` (65,536) | Calibrated initial difficulty for home CPU bootstrap |
-| **Timestamp Rules** | **Strict MTP-11** | Block time must exceed Past Median Time of past 11 blocks; max 15s future drift |
-| **Anti-51% Finality** | **`MaxReorgDepth = 90` + MESS** | 90-block hard rolling finality (~45m) + ECBP-1100 polynomial gravity (up to $31\times$ TD, 15m safety interval) |
+| **Timestamp Rules** | **Strict MTP-11** | Block time must exceed Past Median Time of past 11 blocks; max 30s future drift |
+| **Anti-51% Finality** | **ECBP-1100 (MESS) from Block 0** | Pure ECBP-1100 polynomial gravity (up to $31\times$ TD, 15m safety interval) + Anti-Selfish tie-breaking |
 | **Header Limits** | **`MaxExtraDataSize = 64` bytes** | Anti-bloat cap + two-phase fail-fast parallel `VerifyHeaders` |
 | **Total Max Supply** | **100,000,000 ROGUE** | Exact mathematical hard cap across 32 halving eras (zero tail emission) |
 | **Initial Block Reward**| **25 ROGUE** | Halves every 2,000,000 blocks (~1.90 years at 30s/block) |

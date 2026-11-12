@@ -94,6 +94,14 @@ type EpochInfo struct {
 	FastMode             bool        `json:"fastMode"`
 }
 
+// VMPoolInfo represents the live telemetry of the bounded RandomX VM pool.
+type VMPoolInfo struct {
+	TotalVMs          int64  `json:"totalVMs"`
+	ActiveVMs         int64  `json:"activeVMs"`
+	Mode              string `json:"mode"`
+	AllocatedMemoryMB uint64 `json:"allocatedMemoryMB"`
+}
+
 // ConsensusStatus represents the real-time consensus parameters, monetary schedule, and active security defenses.
 type ConsensusStatus struct {
 	Algorithm           string         `json:"algorithm"`
@@ -102,7 +110,7 @@ type ConsensusStatus struct {
 	MTPWindow           uint64         `json:"mtpWindow"`
 	MaxFutureDrift      uint64         `json:"maxFutureDrift"`
 	MaxExtraDataSize    uint64         `json:"maxExtraDataSize"`
-	MaxReorgDepth       uint64         `json:"maxReorgDepth"`
+	FinalityMode        string         `json:"finalityMode"`
 	MESSActive          bool           `json:"messActive"`
 	UnclesAllowed       bool           `json:"unclesAllowed"`
 	RemoteMiningAllowed bool           `json:"remoteMiningAllowed"`
@@ -116,6 +124,7 @@ type ConsensusStatus struct {
 	TreasuryAddress     common.Address `json:"treasuryAddress"`
 	FastMode            bool           `json:"fastMode"`
 	LocalHashrate       uint64         `json:"localHashrate"`
+	VMPool              VMPoolInfo     `json:"vmPool"`
 	EpochInfo           EpochInfo      `json:"epochInfo"`
 }
 
@@ -172,6 +181,12 @@ func (api *API) GetConsensusStatus() ConsensusStatus {
 	totalReward := CalculateBlockReward(calcBlock)
 	minerReward, treasuryReward := SplitReward(totalReward)
 
+	totalVMs, activeVMs, allocatedMB := api.rx.epochs.VMPoolStats()
+	poolMode := "light"
+	if api.rx.IsFastMode() {
+		poolMode = "fast"
+	}
+
 	return ConsensusStatus{
 		Algorithm:           "RandomX (rx/0)",
 		TargetBlockTime:     DefaultTargetBlockTime,
@@ -179,7 +194,7 @@ func (api *API) GetConsensusStatus() ConsensusStatus {
 		MTPWindow:           MTPWindow,
 		MaxFutureDrift:      MaxFutureDrift,
 		MaxExtraDataSize:    MaxExtraDataSize,
-		MaxReorgDepth:       MaxReorgDepth,
+		FinalityMode:        "ECBP-1100 (MESS)",
 		MESSActive:          true,
 		UnclesAllowed:       false,
 		RemoteMiningAllowed: false,
@@ -193,6 +208,12 @@ func (api *API) GetConsensusStatus() ConsensusStatus {
 		TreasuryAddress:     api.rx.treasury,
 		FastMode:            api.rx.IsFastMode(),
 		LocalHashrate:       uint64(api.rx.Hashrate()),
+		VMPool: VMPoolInfo{
+			TotalVMs:          totalVMs,
+			ActiveVMs:         activeVMs,
+			Mode:              poolMode,
+			AllocatedMemoryMB: allocatedMB,
+		},
 		EpochInfo:           epochInfo,
 	}
 }

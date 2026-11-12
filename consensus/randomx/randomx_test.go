@@ -326,8 +326,11 @@ func TestConsensusStatusAndEpochInfoAPI(t *testing.T) {
 	if status.TargetBlockTime != 30 {
 		t.Errorf("Expected TargetBlockTime 30, got %d", status.TargetBlockTime)
 	}
-	if status.MaxReorgDepth != 90 {
-		t.Errorf("Expected MaxReorgDepth 90, got %d", status.MaxReorgDepth)
+	if status.FinalityMode != "ECBP-1100 (MESS)" {
+		t.Errorf("Expected FinalityMode ECBP-1100 (MESS), got %s", status.FinalityMode)
+	}
+	if status.VMPool.Mode != "light" {
+		t.Errorf("Expected VMPool.Mode light, got %s", status.VMPool.Mode)
 	}
 	if status.MaxExtraDataSize != 64 {
 		t.Errorf("Expected MaxExtraDataSize 64, got %d", status.MaxExtraDataSize)
@@ -565,5 +568,20 @@ func TestStrictEmptyUncleHash(t *testing.T) {
 		t.Fatal("Expected header with non-empty UncleHash to be rejected")
 	} else if !errors.Is(err, ErrUnclesNotAllowed) {
 		t.Fatalf("Expected ErrUnclesNotAllowed, got %v", err)
+	}
+}
+
+func TestVerifySealMixDigestPrecheck(t *testing.T) {
+	rx := New(Config{FastMode: false, Threads: 1})
+	defer rx.Close()
+
+	// Even with nil chain, MixDigest > Target must reject immediately before touching EpochManager/CGo
+	h := &types.Header{
+		Number:     big.NewInt(1),
+		Difficulty: big.NewInt(1000000),
+		MixDigest:  common.HexToHash("0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"),
+	}
+	if err := rx.VerifySeal(nil, h); err == nil {
+		t.Fatal("Expected VerifySeal to reject MixDigest exceeding target before CGo hashing")
 	}
 }

@@ -29,9 +29,6 @@ import (
 const (
 	// MaxExtraDataSize is the maximum size in bytes allowed for header.Extra on Rogue Signal (64 bytes).
 	MaxExtraDataSize = 64
-
-	// MaxReorgDepth is the maximum allowed chain reorganization depth in blocks (90 blocks = ~45 minutes at 30s/block).
-	MaxReorgDepth = 90
 )
 
 var (
@@ -122,11 +119,9 @@ type RandomX struct {
 
 // Config defines the configuration options for RandomX consensus engine.
 type Config struct {
-	FastMode   bool
-	Threads    int
-	Treasury   common.Address
-	NotifyURLs []string
-	NoVerify   bool
+	FastMode bool
+	Threads  int
+	Treasury common.Address
 }
 
 // New creates a full RandomX consensus engine.
@@ -146,12 +141,14 @@ func New(cfg Config) *RandomX {
 }
 
 // SetThreads updates the number of mining threads dynamically (-1 to disable local mining).
+// When mining is stopped (threads <= 0), all idle pooled RandomX VMs are purged to reclaim RAM.
 func (rx *RandomX) SetThreads(threads int) {
 	rx.lock.Lock()
-	defer rx.lock.Unlock()
 	rx.threads = threads
+	rx.lock.Unlock()
 	if threads <= 0 {
 		rx.tracker.Reset()
+		rx.epochs.PurgeAllVMs()
 	}
 }
 
@@ -547,6 +544,7 @@ func (rx *RandomX) VerifySeal(chain consensus.ChainHeaderReader, header *types.H
 	if err != nil {
 		return fmt.Errorf("failed to get RandomX context for block %d: %w", number, err)
 	}
+	defer ctx.DecRef()
 
 	sealHash := rx.SealHash(header)
 	input := MiningInput(sealHash, header.Nonce.Uint64())
@@ -589,6 +587,9 @@ func (rx *RandomX) Seal(chain consensus.ChainHeaderReader, block *types.Block, r
 		return fmt.Errorf("failed to get RandomX context for mining block %d: %w", number, err)
 	}
 
+	// Pre-warm pooled VMs in parallel using GOMAXPROCS before spawning mining threads
+	ctx.PrewarmVMs(threads)
+
 	target := DifficultyToTarget(header.Difficulty)
 	sealHash := rx.SealHash(header)
 
@@ -602,11 +603,21 @@ func (rx *RandomX) Seal(chain consensus.ChainHeaderReader, block *types.Block, r
 	// Mining must run asynchronously to prevent blocking the worker's taskLoop,
 	// allowing task cancellation upon receiving new tasks or chain heads.
 	go func() {
+		defer ctx.DecRef()
+
 		var wg sync.WaitGroup
 		for threadID := 0; threadID < threads; threadID++ {
 			wg.Add(1)
 			go func(tid int) {
 				defer wg.Done()
+
+				// Acquire a thread-local VM for the entire mining session (zero pool/lock contention per hash)
+				vm, err := ctx.AcquireVM()
+				if err != nil {
+					log.Debug("RandomX seal worker failed to acquire VM", "tid", tid, "number", number, "err", err)
+					return
+				}
+				defer ctx.ReleaseVM(vm)
 
 				// Each thread starts searching from an independent randomized nonce offset
 				nonce := rand.Uint64() + uint64(tid)*0x100000000
@@ -630,7 +641,7 @@ func (rx *RandomX) Seal(chain consensus.ChainHeaderReader, block *types.Block, r
 					}
 
 					input := MiningInput(sealHash, nonce)
-					rxHash, err := ctx.CalculateHash(input)
+					rxHash, err := ctx.CalculateHashWithVM(vm, input)
 					if err != nil {
 						rx.markAttempts(attempts)
 						log.Debug("RandomX seal worker stopped due to context error", "tid", tid, "number", number, "err", err)

@@ -464,3 +464,31 @@ func TestRogueMESSFinality(t *testing.T) {
 		t.Error("Expected shallow reorg with higher TD to be allowed")
 	}
 }
+
+func TestRogueGenesisConfigParity(t *testing.T) {
+	file, err := os.Open("../genesis.json")
+	if err != nil {
+		t.Fatalf("Failed to open ../genesis.json: %v", err)
+	}
+	defer file.Close()
+
+	var genesis genesisT.Genesis
+	if err := json.NewDecoder(file).Decode(&genesis); err != nil {
+		t.Fatalf("Failed to decode genesis.json: %v", err)
+	}
+	if genesis.Config == nil {
+		t.Fatal("genesis.json Config is nil")
+	}
+
+	jsonBytes, err := json.Marshal(genesis.Config)
+	if err != nil {
+		t.Fatalf("Failed to marshal genesis.json Config: %v", err)
+	}
+	codeBytes, err := json.Marshal(params.RogueChainConfig)
+	if err != nil {
+		t.Fatalf("Failed to marshal params.RogueChainConfig: %v", err)
+	}
+	if string(jsonBytes) != string(codeBytes) {
+		t.Fatalf("genesis.json ChainConfig parity mismatch:\ngenesis.json: %s\ncode config : %s", string(jsonBytes), string(codeBytes))
+	}
+}

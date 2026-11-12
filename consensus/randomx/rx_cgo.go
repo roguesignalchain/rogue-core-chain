@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"unsafe"
 )
 
@@ -38,7 +39,8 @@ type FastDataset struct {
 	seed  []byte
 }
 
-// RxContext manages cache/dataset for a specific epoch seed and provides a VM pool for thread-safe hashing.
+// RxContext manages cache/dataset for a specific epoch seed and provides an elastic bounded VM pool
+// with atomic reference counting for lock-free, thread-safe hashing and lazy CGo memory release.
 type RxContext struct {
 	seed     []byte
 	fastMode bool
@@ -46,9 +48,13 @@ type RxContext struct {
 	dataset  *FastDataset
 	flags    C.randomx_flags
 
-	vmPool sync.Pool
-	mu     sync.RWMutex
-	closed bool
+	vmPool      chan *VM
+	totalVMs    atomic.Int64
+	activeVMs   atomic.Int64
+	refs        atomic.Int64
+	retired     bool
+	releaseOnce sync.Once
+	mu          sync.RWMutex
 }
 
 // GetRecommendedFlags returns machine-optimized flags (JIT, HardAES, etc.)
@@ -147,20 +153,18 @@ func NewRxContext(seed []byte, fastMode bool) (*RxContext, error) {
 		}
 	}
 
+	poolCap := runtime.NumCPU() + 2
+	if poolCap < 4 {
+		poolCap = 4
+	}
+
 	ctx := &RxContext{
 		seed:     append([]byte(nil), seed...),
 		fastMode: fastMode,
 		cache:    cache,
 		dataset:  dataset,
 		flags:    flags,
-	}
-
-	ctx.vmPool.New = func() interface{} {
-		vm := ctx.createVM()
-		if vm == nil {
-			return nil
-		}
-		return vm
+		vmPool:   make(chan *VM, poolCap),
 	}
 
 	return ctx, nil
@@ -196,33 +200,181 @@ func (ctx *RxContext) createVM() *VM {
 // Destroy cleans up the VM instance.
 func (v *VM) Destroy() {
 	if v.raw != nil {
+		runtime.SetFinalizer(v, nil)
 		C.randomx_destroy_vm(v.raw)
 		v.raw = nil
 	}
 }
 
-// CalculateHash calculates the 32-byte RandomX hash using a pooled VM.
-// Holds a read lock on the context for the entire duration of the CGo execution
-// to prevent use-after-free if Close() is invoked concurrently during epoch rotation.
-func (ctx *RxContext) CalculateHash(input []byte) ([32]byte, error) {
+// IncRef atomically increments the active reference count if the context has not been retired.
+// Returns false if the context is already retired and cannot be used.
+func (ctx *RxContext) IncRef() bool {
 	ctx.mu.RLock()
-	defer ctx.mu.RUnlock()
+	if ctx.retired {
+		ctx.mu.RUnlock()
+		return false
+	}
+	ctx.refs.Add(1)
+	ctx.mu.RUnlock()
+	return true
+}
 
-	if ctx.closed {
-		return [32]byte{}, errors.New("context is closed")
+// DecRef decrements the active reference count and lazily releases underlying CGo memory
+// once the context is retired and no active references remain.
+func (ctx *RxContext) DecRef() {
+	if ctx.refs.Add(-1) == 0 {
+		ctx.mu.RLock()
+		retired := ctx.retired
+		ctx.mu.RUnlock()
+		if retired {
+			ctx.tryRelease()
+		}
+	}
+}
+
+// AcquireVM retrieves a pre-warmed VM from the bounded elastic pool, or allocates a temporary
+// VM if all pooled VMs are currently occupied (e.g. concurrent P2P burst validation).
+func (ctx *RxContext) AcquireVM() (*VM, error) {
+	ctx.mu.RLock()
+	if ctx.retired {
+		ctx.mu.RUnlock()
+		return nil, errors.New("context is retired")
+	}
+	ctx.mu.RUnlock()
+
+	select {
+	case vm := <-ctx.vmPool:
+		if vm != nil && vm.raw != nil {
+			ctx.activeVMs.Add(1)
+			return vm, nil
+		}
+	default:
 	}
 
-	item := ctx.vmPool.Get()
-	if item == nil {
-		return [32]byte{}, errors.New("failed to allocate RandomX VM")
+	vm := ctx.createVM()
+	if vm == nil {
+		return nil, errors.New("failed to allocate RandomX VM")
 	}
-	vm, ok := item.(*VM)
-	if !ok || vm == nil || vm.raw == nil {
-		return [32]byte{}, errors.New("failed to allocate RandomX VM")
-	}
-	defer ctx.vmPool.Put(vm)
+	ctx.totalVMs.Add(1)
+	ctx.activeVMs.Add(1)
+	return vm, nil
+}
 
+// ReleaseVM returns a VM to the bounded elastic pool, or destroys it immediately if the pool
+// is already at capacity or the context has been retired.
+func (ctx *RxContext) ReleaseVM(vm *VM) {
+	if vm == nil {
+		return
+	}
+	ctx.activeVMs.Add(-1)
+
+	ctx.mu.RLock()
+	retired := ctx.retired
+	ctx.mu.RUnlock()
+	if retired {
+		vm.Destroy()
+		ctx.totalVMs.Add(-1)
+		return
+	}
+
+	select {
+	case ctx.vmPool <- vm:
+	default:
+		vm.Destroy()
+		ctx.totalVMs.Add(-1)
+	}
+}
+
+// PrewarmVMs initializes up to count VMs in parallel using GOMAXPROCS workers
+// so mining threads start with zero JIT compilation latency.
+func (ctx *RxContext) PrewarmVMs(count int) {
+	ctx.mu.RLock()
+	retired := ctx.retired
+	ctx.mu.RUnlock()
+	if retired || count <= 0 {
+		return
+	}
+
+	poolCap := cap(ctx.vmPool)
+	if count > poolCap {
+		count = poolCap
+	}
+	existing := len(ctx.vmPool)
+	needed := count - existing
+	if needed <= 0 {
+		return
+	}
+
+	workers := runtime.GOMAXPROCS(0)
+	if workers < 1 {
+		workers = 1
+	}
+	if workers > needed {
+		workers = needed
+	}
+
+	jobs := make(chan struct{}, needed)
+	for i := 0; i < needed; i++ {
+		jobs <- struct{}{}
+	}
+	close(jobs)
+
+	var wg sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range jobs {
+				ctx.mu.RLock()
+				if ctx.retired {
+					ctx.mu.RUnlock()
+					return
+				}
+				ctx.mu.RUnlock()
+
+				vm := ctx.createVM()
+				if vm == nil {
+					continue
+				}
+				select {
+				case ctx.vmPool <- vm:
+					ctx.totalVMs.Add(1)
+				default:
+					vm.Destroy()
+				}
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+// PurgeVMs destroys all idle VMs in the pool to immediately reclaim RAM when mining stops.
+func (ctx *RxContext) PurgeVMs() {
+	for {
+		select {
+		case vm := <-ctx.vmPool:
+			if vm != nil {
+				vm.Destroy()
+				ctx.totalVMs.Add(-1)
+			}
+		default:
+			return
+		}
+	}
+}
+
+// VMPoolStats returns the current total allocated VMs and actively hashing VMs for this context.
+func (ctx *RxContext) VMPoolStats() (total, active int64) {
+	return ctx.totalVMs.Load(), ctx.activeVMs.Load()
+}
+
+// CalculateHashWithVM computes the 32-byte RandomX hash using an already-acquired thread-local VM.
+// The caller must hold an active context reference via IncRef() for the duration of the call.
+func (ctx *RxContext) CalculateHashWithVM(vm *VM, input []byte) ([32]byte, error) {
 	var output [32]byte
+	if vm == nil || vm.raw == nil {
+		return output, errors.New("invalid RandomX VM")
+	}
 	if len(input) == 0 {
 		return output, errors.New("empty input")
 	}
@@ -240,22 +392,51 @@ func (ctx *RxContext) CalculateHash(input []byte) ([32]byte, error) {
 	return output, nil
 }
 
-// Close frees all memory associated with this context.
+// CalculateHash calculates the 32-byte RandomX hash using a pooled VM and atomic reference counting.
+func (ctx *RxContext) CalculateHash(input []byte) ([32]byte, error) {
+	if !ctx.IncRef() {
+		return [32]byte{}, errors.New("context is closed")
+	}
+	defer ctx.DecRef()
+
+	vm, err := ctx.AcquireVM()
+	if err != nil {
+		return [32]byte{}, err
+	}
+	defer ctx.ReleaseVM(vm)
+
+	return ctx.CalculateHashWithVM(vm, input)
+}
+
+func (ctx *RxContext) tryRelease() {
+	ctx.releaseOnce.Do(func() {
+		ctx.mu.Lock()
+		defer ctx.mu.Unlock()
+
+		ctx.PurgeVMs()
+		if ctx.dataset != nil {
+			ctx.dataset.Release()
+			ctx.dataset = nil
+		} else if ctx.cache != nil {
+			ctx.cache.Release()
+			ctx.cache = nil
+		}
+	})
+}
+
+// Close marks the context as retired and releases all memory once active references reach zero.
 func (ctx *RxContext) Close() {
 	ctx.mu.Lock()
-	defer ctx.mu.Unlock()
-
-	if ctx.closed {
+	if ctx.retired {
+		ctx.mu.Unlock()
 		return
 	}
-	ctx.closed = true
+	ctx.retired = true
+	refs := ctx.refs.Load()
+	ctx.mu.Unlock()
 
-	if ctx.dataset != nil {
-		ctx.dataset.Release()
-		ctx.dataset = nil
-	} else if ctx.cache != nil {
-		ctx.cache.Release()
-		ctx.cache = nil
+	if refs == 0 {
+		ctx.tryRelease()
 	}
 }
 

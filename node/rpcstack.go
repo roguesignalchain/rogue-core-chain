@@ -89,14 +89,23 @@ type httpServer struct {
 	port     int
 
 	handlerNames map[string]string
+
+	ipConnsMu sync.Mutex
+	ipConns   map[string]int
 }
 
 const (
-	shutdownTimeout = 5 * time.Second
+	shutdownTimeout   = 5 * time.Second
+	maxHTTPConnsPerIP = 100
 )
 
 func newHTTPServer(log log.Logger, timeouts rpc.HTTPTimeouts) *httpServer {
-	h := &httpServer{log: log, timeouts: timeouts, handlerNames: make(map[string]string)}
+	h := &httpServer{
+		log:          log,
+		timeouts:     timeouts,
+		handlerNames: make(map[string]string),
+		ipConns:      make(map[string]int),
+	}
 
 	h.httpHandler.Store((*rpcHandler)(nil))
 	h.wsHandler.Store((*rpcHandler)(nil))
@@ -196,7 +205,44 @@ func (h *httpServer) start() error {
 	return nil
 }
 
+func (h *httpServer) acquireIPSlot(remoteAddr string) (string, bool) {
+	ip, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		ip = remoteAddr
+	}
+	if ip == "" {
+		return "", true
+	}
+	h.ipConnsMu.Lock()
+	defer h.ipConnsMu.Unlock()
+	if h.ipConns[ip] >= maxHTTPConnsPerIP {
+		return "", false
+	}
+	h.ipConns[ip]++
+	return ip, true
+}
+
+func (h *httpServer) releaseIPSlot(ip string) {
+	if ip == "" {
+		return
+	}
+	h.ipConnsMu.Lock()
+	defer h.ipConnsMu.Unlock()
+	if n := h.ipConns[ip]; n <= 1 {
+		delete(h.ipConns, ip)
+	} else {
+		h.ipConns[ip] = n - 1
+	}
+}
+
 func (h *httpServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if ip, ok := h.acquireIPSlot(r.RemoteAddr); !ok {
+		http.Error(w, "too many concurrent requests from IP", http.StatusTooManyRequests)
+		return
+	} else {
+		defer h.releaseIPSlot(ip)
+	}
+
 	// check if ws request and serve if ws enabled
 	ws := h.wsHandler.Load().(*rpcHandler)
 	if ws != nil && isWebsocket(r) {

@@ -66,6 +66,7 @@ func TestEpochContextResolution(t *testing.T) {
 	if ctx == nil {
 		t.Fatal("Context for block 0 is nil")
 	}
+	defer ctx.DecRef()
 
 	// Hash calculation with epoch 0 context
 	hash, err := ctx.CalculateHash([]byte("Rogue Signal Test"))
@@ -192,5 +193,77 @@ func TestSideForkEpochSeedResolution(t *testing.T) {
 	}
 	if resolvedB != seedB.Hash() {
 		t.Fatalf("Expected side-fork seed %s, got %s", seedB.Hash().Hex(), resolvedB.Hex())
+	}
+
+	// Subsequent call for the same header must hit the O(1) resolvedSeeds cache
+	if len(em.resolvedSeeds) == 0 {
+		t.Fatal("Expected resolvedSeeds cache to be populated")
+	}
+	resolvedBCached, err := em.ResolveSeedForHeader(sideHeaders[2048], nil)
+	if err != nil {
+		t.Fatalf("Cached ResolveSeedForHeader failed: %v", err)
+	}
+	if resolvedBCached != seedB.Hash() {
+		t.Fatalf("Expected cached side-fork seed %s, got %s", seedB.Hash().Hex(), resolvedBCached.Hex())
+	}
+}
+
+func TestRxContextRefCountAndVMPool(t *testing.T) {
+	chain := NewFakeChainReader()
+	genesis := &types.Header{
+		Number: big.NewInt(0),
+		Time:   1000,
+	}
+	chain.AddHeader(genesis)
+
+	em := NewEpochManager(false)
+	defer em.Close()
+
+	ctx, err := em.GetContext(0, chain)
+	if err != nil {
+		t.Fatalf("GetContext failed: %v", err)
+	}
+
+	// Prewarm 2 VMs and verify pool telemetry
+	ctx.PrewarmVMs(2)
+	totalVMs, activeVMs, allocatedMB := em.VMPoolStats()
+	if totalVMs != 2 {
+		t.Fatalf("Expected 2 prewarmed VMs, got %d", totalVMs)
+	}
+	if activeVMs != 0 {
+		t.Fatalf("Expected 0 active VMs when idle, got %d", activeVMs)
+	}
+	if allocatedMB < 256 {
+		t.Fatalf("Expected at least 256 MB allocated in light mode, got %d", allocatedMB)
+	}
+
+	// Acquire a VM and compute hash
+	vm, err := ctx.AcquireVM()
+	if err != nil {
+		t.Fatalf("AcquireVM failed: %v", err)
+	}
+	_, activeDuring, _ := em.VMPoolStats()
+	if activeDuring != 1 {
+		t.Fatalf("Expected 1 active VM while acquired, got %d", activeDuring)
+	}
+	h, err := ctx.CalculateHashWithVM(vm, []byte("vm-pool-test"))
+	if err != nil {
+		t.Fatalf("CalculateHashWithVM failed: %v", err)
+	}
+	if len(h) != 32 {
+		t.Fatalf("Expected 32-byte hash, got %d", len(h))
+	}
+	ctx.ReleaseVM(vm)
+
+	// Close context while still holding a reference; memory must stay alive until DecRef
+	ctx.Close()
+	if ctx.refs.Load() <= 0 {
+		t.Fatal("Expected refcount > 0 before DecRef")
+	}
+
+	// Final DecRef triggers lazy release and purges VMs
+	ctx.DecRef()
+	if ctx.refs.Load() != 0 {
+		t.Fatalf("Expected refcount 0 after DecRef, got %d", ctx.refs.Load())
 	}
 }
