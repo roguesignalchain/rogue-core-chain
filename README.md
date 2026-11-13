@@ -10,12 +10,14 @@
 ## 📋 Table of Contents
 
 - [Overview & Technical Specifications](#-overview--technical-specifications)
+- [Deep-Dive Technical Documentation](#-deep-dive-technical-documentation)
 - [Monetary Policy & Halving Schedule](#-monetary-policy--halving-schedule)
 - [Architecture & Internal Modifications](#-architecture--internal-modifications)
   - [Consensus Package (`consensus/randomx`)](#1-consensus-package-consensusrandomx)
   - [Parameters & Genesis (`params/`)](#2-parameters--genesis-params)
-  - [Backend & Engine Dispatch (`eth/`)](#3-backend--engine-dispatch-eth)
+  - [Backend & Engine Dispatch (`eth/` & `miner/`)](#3-backend--engine-dispatch-eth--miner)
   - [CLI Flags & Port Management (`cmd/utils/`)](#4-cli-flags--port-management-cmdutils)
+- [Consensus & Protocol Optimizations](#-consensus--protocol-optimizations)
 - [Building from Source (Native, No Docker)](#-building-from-source-native-no-docker)
   - [Prerequisites](#prerequisites)
   - [Compilation on Linux](#compilation-on-linux)
@@ -48,17 +50,17 @@
 | **Chain ID** | **`800055`** | Strict EIP-155 replay protection active from block 0 |
 | **Mining Algorithm**| **RandomX (`rx/0`)** | Native ASIC/GPU-resistant CPU Proof-of-Work |
 | **Default RAM Profile**| **Light Mode (~256 MB RAM)** | Default profile optimized for home computers and low-memory hardware |
-| **Optional RAM Profile**| **Fast Mode (~2.08 GB RAM)** | Activated only when both `--mine` and `--randomx.fast` are enabled (otherwise Light Mode) |
-| **VM Pool Architecture** | **Elastic Bounded Channel (`NumCPU + 2`)** | Parallel `GOMAXPROCS` prewarm, zero GC churn, thread-local `AcquireVM`/`ReleaseVM`, lazy atomic refcounting |
+| **Optional RAM Profile**| **Fast Mode (~2.08 GB RAM)** | Activated via `--randomx.fast` (preserved for RPC/IPC `miner_start` even when `--mine` is omitted at startup) |
+| **VM Pool Architecture** | **Elastic Bounded Channel (`NumCPU + 2`)** | Parallel `GOMAXPROCS` prewarm, zero GC churn, thread-local `AcquireVM`/`ReleaseVM`, atomic refcounting (`IncRef`/`DecRef`) |
 | **Block Target Time** | **30 seconds** | Low-orphan global cadence (`< 0.5%` orphan rate) without Uncles |
-| **Gas Limit** | **50,000,000** per block | High transaction bandwidth (`1 Gwei` min TxPool floor, 128 MB TxPool RAM cap, legacy tx type 0 only) |
-| **Difficulty Algorithm** | **LWMA-1** ($N=60$) | Linear Weighted Moving Average (~30m window, candidate timestamp independent) |
+| **Gas Limit / GasCeil** | **50,000,000** per block | High transaction bandwidth (`1 Gwei` min TxPool floor, `4096+1024` slots / 128 MB cap, strict Type 0 `LegacyTx` only) |
+| **Difficulty Algorithm** | **LWMA-1** ($N=60$) | Linear Weighted Moving Average (~30m window, candidate timestamp independent, unified with MTP-11 traversal) |
 | **Target Clamping** | **$\pm 33\%$ per block** | Clamps adjustment to $[67\%, 133\%]$ to prevent hashrate shock attacks |
 | **Genesis Difficulty** | `0x10000` (65,536) | Calibrated initial difficulty for home CPU bootstrap |
 | **Timestamp Rules** | **Strict MTP-11** | Block time must exceed Past Median Time of past 11 blocks; max 30s future drift |
-| **Anti-51% Finality** | **ECBP-1100 (MESS) from Block 0** | Pure ECBP-1100 polynomial gravity (up to $31\times$ TD, 15m safety interval) + Anti-Selfish tie-breaking |
-| **Header Limits** | **`MaxExtraDataSize = 64` bytes** | Anti-bloat cap + two-phase fail-fast parallel `VerifyHeaders` |
-| **Total Max Supply** | **100,000,000 ROGUE** | Exact mathematical hard cap across 32 halving eras (zero tail emission) |
+| **Anti-51% Finality** | **ECBP-1100 (MESS) from Block 0** | Pure ECBP-1100 polynomial gravity (up to $31\times$ TD, 15m safety interval, underflow-guarded) + `FullSync` default |
+| **Header Limits** | **`MaxExtraDataSize = 64` bytes** | Anti-bloat cap + two-phase fail-fast parallel `VerifyHeaders` + inactive fork field rejection |
+| **Total Max Supply** | **100,000,000 ROGUE** | Exact mathematical hard cap across 32 halving eras (`EraRemainderWei` compensation, zero tail emission) |
 | **Initial Block Reward**| **25 ROGUE** | Halves every 2,000,000 blocks (~1.90 years at 30s/block) |
 | **Reward Split** | **95% Miner / 5% Treasury** | 23.75 ROGUE to miner coinbase (+ 100% tx fees), 1.25 ROGUE to protocol treasury |
 | **Treasury Address** | `0xe9aaE535B7971A9AC8C6af0e4B524D02260D3a03` | Protocol development treasury address (`params/config_rogue.go`) |
@@ -78,6 +80,16 @@
 
 ---
 
+## 📚 Deep-Dive Technical Documentation
+
+For detailed engineering specifications, mathematical proofs, and RPC/ABI references, see the dedicated English technical docs in [`docs/`](./docs/index.md):
+
+- [**Consensus & RandomX Architecture**](./docs/consensus-architecture.md) — CGo memory lifecycle, Elastic Bounded VM Pool, `EpochManager` reorg-safe seed resolution, LWMA-1 + MTP-11, exact 100M emission (`EraRemainderWei`), ECBP-1100 (MESS), and `0x...0020` miner gamification.
+- [**Protocol, Performance & Security Optimizations**](./docs/protocol-optimizations.md) — Two-phase parallel `VerifyHeaders`, zero-alloc `Seal()` hot loop, miner worker scheduling, TxPool Type-0 hardening, reverse-proxy RPC rate limiting, and `FullSync` defaults.
+- [**JSON-RPC, CLI Flags & System Contracts**](./docs/rpc-and-contracts.md) — `randomx_*` telemetry/control RPCs, disabled remote-mining `eth_*` stubs, Rogue Signal CLI flags, and `RogueMinerReputation` (`0x...0020`) ABI reference.
+
+---
+
 ## 💰 Monetary Policy & Halving Schedule
 
 Rogue Signal implements a strictly disinflationary emission model inspired by Bitcoin, calibrated for a 30-second block cadence:
@@ -90,6 +102,7 @@ $$\text{Reward} = \left\lfloor \frac{25 \times 10^{18}}{2^{\text{Era}}} \right\r
 * **Era 2 (Blocks 4,000,001 – 6,000,000 / ~Years 3.8–5.7)**: 6.25 ROGUE per block (5.9375 ROGUE miner / 0.3125 ROGUE treasury). **12,500,000 ROGUE minted**.
 * **Era 3 (Blocks 6,000,001 – 8,000,000 / ~Years 5.7–7.6)**: 3.125 ROGUE per block (2.96875 ROGUE miner / 0.15625 ROGUE treasury). **6,250,000 ROGUE minted**.
 * **Eras 4 – 31**: Exponential reduction halving every 2.0M blocks.
+* **Zero-Truncation Exact Cap (`EraRemainderWei`)**: Integer right-shifting `25 * 10^18` wei across later eras leaves a sub-wei truncation remainder. On the final block of each halving era (`blockNumber % 2,000,000 == 0`), `CalculateBlockReward` adds `EraRemainderWei = 727,595,761,750,000 wei` ($32 \times 727,595,761,750,000 = 0.023283064376\text{ ROGUE}$ total), guaranteeing an exact cumulative emission of **`100,000,000.000000000000000000 ROGUE`**.
 * **Era 32+**: **0 ROGUE (Absolute Zero)**. After 100M ROGUE are minted ($25 \times 2,000,000 \times 2 = 100,000,000$), the block subsidy is permanently terminated. Miners are sustained 100% by transaction gas fees.
 
 ---
@@ -192,6 +205,28 @@ $$\text{Reward} = \left\lfloor \frac{25 \times 10^{18}}{2^{\text{Era}}} \right\r
 
 ---
 
+## ⚡ Consensus & Protocol Optimizations
+
+Core-Rogue goes beyond a minimal RandomX port with production-hardened optimizations across consensus, mining, P2P sync, TxPool, and RPC security (detailed in [`docs/protocol-optimizations.md`](./docs/protocol-optimizations.md)):
+
+1. **Zero-Alloc PoW Verification & Mining Hot Loop**:
+   - `VerifySeal` performs a zero-allocation `HashMeetsTarget` pre-check on `header.MixDigest` before invoking CGo RandomX, and routes historical-epoch headers on Fast Mode nodes to 256 MB Light Mode (`GetLightContextForHeader`) to avoid 2.08 GB dataset allocations or active mining epoch evictions.
+   - `Seal()` serializes sealing sessions (`sealMu`/`activeSealDone`), pre-warms VMs in parallel (`GOMAXPROCS`), waits out `MaxFutureDrift` if `MTP-11` pushes `header.Time` ahead of wall-clock time, and runs a stack-allocated 76-byte `rx/0` hot loop with 64-hash batched atomic hashrate accounting.
+2. **Two-Phase Fail-Fast Parallel `VerifyHeaders`**:
+   - Phase 1 validates lightweight rules in microseconds (`CalculateDifficultyAndMTP11` in a single ancestor walk, `MaxExtraDataSize <= 64`, `EmptyUncleHash`, `GasLimit`/`GasUsed`, and strict `nil` enforcement on inactive-fork fields `BaseFee`, `WithdrawalsHash`, `ExcessBlobGas`, `BlobGasUsed`, `ParentBeaconRoot`).
+   - Phase 2 dispatches RandomX PoW verification across `runtime.NumCPU()` goroutines while emitting results in strict header order.
+3. **Elastic Bounded VM Pool & UAF-Safe CGo Lifecycle**:
+   - Replaces GC-vulnerable `sync.Pool` with a bounded channel pool (`max(4, NumCPU+2)`), atomic `RxContext` reference counting (`IncRef`/`DecRef`) with lazy `sync.Once` release, and automatic `PurgeAllVMs()` on `miner.stop()`.
+   - Zero-config HugePages try-with-fallback (reserving HugePages for `FastDataset` in Fast Mode and freeing the temporary 256 MB `LightCache` immediately) plus `RANDOMX_FLAG_SECURE` / interpreter fallbacks for W^X kernels.
+4. **Miner Scheduling, Sync & Finality Hardening**:
+   - Suppresses empty-TxPool preliminary block commits, deduplicates sealing tasks by `sealhash`, aligns `miner.DefaultConfig.GasCeil` to `50,000,000`, and sets default `Recommit = 10s`.
+   - Defaults `--rogue` nodes to `downloader.FullSync` (preventing block discards on young networks awaiting snap-sync pivots) and guards `ECBP-1100 (MESS)` against `uint64` underflow under non-monotonic `MTP-11` timestamps (`core/blockchain_af.go`).
+5. **TxPool & Reverse-Proxy RPC Hardening**:
+   - Enforces Type 0 `LegacyTx` only across both `eth_sendRawTransaction` and `legacypool.validateTxBasics`, with `GlobalSlots = 4096 + 1024`, `128 MB` pool cap, and `1 Gwei` floor.
+   - Protects HTTP/WS RPC with `--http.maxconnsperip` (default `100`, `HTTP 429` + `Retry-After: 1`), fail-closed `--http.trustedproxies` CIDR extraction (Rightmost Untrusted IP on `X-Forwarded-For`), and opt-in `randomx` RPC namespace (`cmd/geth/config.go`).
+
+---
+
 ## 🛠️ Building from Source (Native, No Docker)
 
 Core-Rogue compiles `librandomx` statically from source and links it directly into the binary.
@@ -273,12 +308,19 @@ CGO_ENABLED=1 go test -v -run TestOfficialRandomXVectorsLightMode ./consensus/ra
 CGO_ENABLED=1 go test -v -run TestConcurrentHashing               # Thread-safety VM pool test
 CGO_ENABLED=1 go test -v -run TestDifficultyTargetConversion      # Target & difficulty math
 CGO_ENABLED=1 go test -v -run TestLWMAAdjusts                     # LWMA-1 difficulty adjustment
+CGO_ENABLED=1 go test -v -run TestCalculateDifficultyAndMTP11     # Unified LWMA-1 + MTP-11 traversal
 CGO_ENABLED=1 go test -v -run TestMTP11StrictValidation           # Strict MTP-11 time rules
-CGO_ENABLED=1 go test -v -run TestBlockRewardHalving              # 2-year halving schedule
+CGO_ENABLED=1 go test -v -run TestBlockRewardHalving              # 2-year halving schedule & EraRemainderWei
 CGO_ENABLED=1 go test -v -run TestSplitReward                     # 95% miner / 5% treasury split
-CGO_ENABLED=1 go test -v -run TestMaxSupplyCapCompliance          # 100M hard cap compliance
+CGO_ENABLED=1 go test -v -run TestMaxSupplyCapCompliance          # Exact 100M hard cap compliance
 CGO_ENABLED=1 go test -v -run TestEpochCalculations               # 2048-block epoch & lag math
+CGO_ENABLED=1 go test -v -run TestGetLightContextForHeader        # Light-mode historical verification on Fast nodes
 CGO_ENABLED=1 go test -v -run TestSealAndVerifySealIntegration    # End-to-end RandomX block mining & verification
+
+# Run protocol & security hardening tests across core, txpool, and node
+CGO_ENABLED=1 go test -v -run TestRogueMESSNonMonotonicMTP11 ./core
+CGO_ENABLED=1 go test -v ./core/txpool/legacypool -run TestRogue
+CGO_ENABLED=1 go test -v -run TestHTTPServerTrustedProxyAndRetryAfter ./node
 ```
 
 ---
