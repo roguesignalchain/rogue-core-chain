@@ -190,6 +190,8 @@ var (
 		utils.GraphQLVirtualHostsFlag,
 		utils.HTTPApiFlag,
 		utils.HTTPPathPrefixFlag,
+		utils.HTTPTrustedProxiesFlag,
+		utils.HTTPMaxConnsPerIPFlag,
 		utils.WSEnabledFlag,
 		utils.WSListenAddrFlag,
 		utils.WSPortFlag,

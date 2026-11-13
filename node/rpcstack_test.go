@@ -657,3 +657,64 @@ func TestHTTPServerIPConnLimit(t *testing.T) {
 		t.Fatalf("expected ipConns map to be empty after release, got %d entries", remaining)
 	}
 }
+
+func TestHTTPServerTrustedProxyAndRetryAfter(t *testing.T) {
+	limit := 2
+	srv := newHTTPServer(log.Root(), rpc.DefaultHTTPTimeouts)
+	srv.setIPRateLimit(&limit, []string{"127.0.0.1/32", "10.0.0.0/8"})
+
+	// 1. Fail-closed: untrusted peer spoofing X-Forwarded-For must be tracked by RemoteAddr, not spoofed header.
+	spoofReq := httptest.NewRequest(http.MethodPost, "/", nil)
+	spoofReq.RemoteAddr = "198.51.100.99:4000"
+	spoofReq.Header.Set("X-Forwarded-For", "1.1.1.1")
+	if got := srv.clientIP(spoofReq); got != "198.51.100.99" {
+		t.Fatalf("expected untrusted peer IP 198.51.100.99, got %q", got)
+	}
+
+	// 2. Rightmost Untrusted IP: spoofed left IP + real client + trusted hop -> selects real client (203.0.113.7).
+	multiHopReq := httptest.NewRequest(http.MethodPost, "/", nil)
+	multiHopReq.RemoteAddr = "127.0.0.1:5000"
+	multiHopReq.Header.Set("X-Forwarded-For", "8.8.8.8, 203.0.113.7, 10.0.0.5")
+	if got := srv.clientIP(multiHopReq); got != "203.0.113.7" {
+		t.Fatalf("expected rightmost untrusted IP 203.0.113.7, got %q", got)
+	}
+
+	// 3. Fallback to X-Real-IP when X-Forwarded-For is absent on a trusted proxy.
+	realIPReq := httptest.NewRequest(http.MethodPost, "/", nil)
+	realIPReq.RemoteAddr = "127.0.0.1:5001"
+	realIPReq.Header.Set("X-Real-IP", "203.0.113.8")
+	if got := srv.clientIP(realIPReq); got != "203.0.113.8" {
+		t.Fatalf("expected X-Real-IP fallback 203.0.113.8, got %q", got)
+	}
+
+	// 4. Rate limit enforcement on real client IP + Retry-After: 1 header on HTTP 429 (including WebSocket upgrade requests).
+	ip1, ok1 := srv.acquireRequestIPSlot(multiHopReq)
+	ip2, ok2 := srv.acquireRequestIPSlot(multiHopReq)
+	if !ok1 || !ok2 || ip1 != "203.0.113.7" || ip2 != "203.0.113.7" {
+		t.Fatalf("expected 2 slots for 203.0.113.7, got (%q,%v) (%q,%v)", ip1, ok1, ip2, ok2)
+	}
+	wsReq := httptest.NewRequest(http.MethodGet, "/", nil)
+	wsReq.RemoteAddr = "127.0.0.1:5002"
+	wsReq.Header.Set("X-Forwarded-For", "203.0.113.7")
+	wsReq.Header.Set("Connection", "upgrade")
+	wsReq.Header.Set("Upgrade", "websocket")
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, wsReq)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected HTTP 429 for WebSocket over limit, got %d", rec.Code)
+	}
+	if rec.Header().Get("Retry-After") != "1" {
+		t.Fatalf("expected Retry-After: 1 header, got %q", rec.Header().Get("Retry-After"))
+	}
+	srv.releaseIPSlot(ip1)
+	srv.releaseIPSlot(ip2)
+
+	// 5. Setting maxConns = 0 disables the limit.
+	zero := 0
+	srv.setIPRateLimit(&zero, []string{"127.0.0.1/32"})
+	for i := 0; i < 5; i++ {
+		if _, ok := srv.acquireRequestIPSlot(multiHopReq); !ok {
+			t.Fatalf("expected limit=0 to allow unlimited slots (failed at %d)", i)
+		}
+	}
+}

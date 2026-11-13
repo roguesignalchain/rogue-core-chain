@@ -139,6 +139,15 @@ type Config struct {
 	// HTTPPathPrefix specifies a path prefix on which http-rpc is to be served.
 	HTTPPathPrefix string `toml:",omitempty"`
 
+	// HTTPTrustedProxies is a list of trusted reverse proxy IPs or CIDRs allowed to
+	// supply X-Forwarded-For / X-Real-IP headers for per-IP rate limiting.
+	// Empty by default (fail-closed).
+	HTTPTrustedProxies []string `toml:",omitempty"`
+
+	// HTTPMaxConnsPerIP overrides the maximum concurrent HTTP/WebSocket connections
+	// allowed per client IP (nil uses default 100; 0 disables the limit).
+	HTTPMaxConnsPerIP *int `toml:",omitempty"`
+
 	// AuthAddr is the listening address on which authenticated APIs are provided.
 	AuthAddr string `toml:",omitempty"`
 

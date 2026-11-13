@@ -90,8 +90,10 @@ type httpServer struct {
 
 	handlerNames map[string]string
 
-	ipConnsMu sync.Mutex
-	ipConns   map[string]int
+	ipConnsMu      sync.Mutex
+	ipConns        map[string]int
+	maxConnsPerIP  int
+	trustedProxies []*net.IPNet
 }
 
 const (
@@ -101,15 +103,61 @@ const (
 
 func newHTTPServer(log log.Logger, timeouts rpc.HTTPTimeouts) *httpServer {
 	h := &httpServer{
-		log:          log,
-		timeouts:     timeouts,
-		handlerNames: make(map[string]string),
-		ipConns:      make(map[string]int),
+		log:           log,
+		timeouts:      timeouts,
+		handlerNames:  make(map[string]string),
+		ipConns:       make(map[string]int),
+		maxConnsPerIP: maxHTTPConnsPerIP,
 	}
 
 	h.httpHandler.Store((*rpcHandler)(nil))
 	h.wsHandler.Store((*rpcHandler)(nil))
 	return h
+}
+
+// setIPRateLimit configures per-IP concurrency limits and trusted reverse proxy CIDRs.
+func (h *httpServer) setIPRateLimit(maxConns *int, trustedProxies []string) {
+	h.ipConnsMu.Lock()
+	defer h.ipConnsMu.Unlock()
+
+	if maxConns != nil {
+		if *maxConns <= 0 {
+			h.maxConnsPerIP = 0
+		} else {
+			h.maxConnsPerIP = *maxConns
+		}
+	}
+
+	h.trustedProxies = nil
+	for _, entry := range trustedProxies {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		if strings.Contains(entry, "/") {
+			_, ipNet, err := net.ParseCIDR(entry)
+			if err != nil {
+				h.log.Warn("Ignoring invalid trusted proxy CIDR", "cidr", entry, "err", err)
+				continue
+			}
+			h.trustedProxies = append(h.trustedProxies, ipNet)
+		} else {
+			ip := net.ParseIP(entry)
+			if ip == nil {
+				h.log.Warn("Ignoring invalid trusted proxy IP", "ip", entry)
+				continue
+			}
+			bits := 128
+			if v4 := ip.To4(); v4 != nil {
+				ip = v4
+				bits = 32
+			}
+			h.trustedProxies = append(h.trustedProxies, &net.IPNet{
+				IP:   ip,
+				Mask: net.CIDRMask(bits, bits),
+			})
+		}
+	}
 }
 
 // setListenAddr configures the listening address of the server.
@@ -205,6 +253,64 @@ func (h *httpServer) start() error {
 	return nil
 }
 
+func (h *httpServer) isTrustedProxy(ipStr string) bool {
+	ip := net.ParseIP(ipStr)
+	if ip == nil {
+		return false
+	}
+	for _, cidr := range h.trustedProxies {
+		if cidr.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// clientIP resolves the real client IP using the Rightmost Untrusted IP algorithm on
+// X-Forwarded-For (with X-Real-IP fallback), strictly when r.RemoteAddr belongs to
+// configured trustedProxies. Otherwise it returns the direct peer IP (fail-closed).
+func (h *httpServer) clientIP(r *http.Request) string {
+	peerIP, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		peerIP = r.RemoteAddr
+	}
+	if peerIP == "" {
+		return ""
+	}
+	if len(h.trustedProxies) == 0 || !h.isTrustedProxy(peerIP) {
+		return peerIP
+	}
+
+	if xffValues := r.Header.Values("X-Forwarded-For"); len(xffValues) > 0 {
+		combined := strings.Join(xffValues, ",")
+		parts := strings.Split(combined, ",")
+		var lastValid string
+		for i := len(parts) - 1; i >= 0; i-- {
+			candidate := strings.TrimSpace(parts[i])
+			parsed := net.ParseIP(candidate)
+			if parsed == nil {
+				continue
+			}
+			normalized := parsed.String()
+			lastValid = normalized
+			if !h.isTrustedProxy(normalized) {
+				return normalized
+			}
+		}
+		if lastValid != "" {
+			return lastValid
+		}
+	}
+
+	if xRealIP := strings.TrimSpace(r.Header.Get("X-Real-IP")); xRealIP != "" {
+		if parsed := net.ParseIP(xRealIP); parsed != nil {
+			return parsed.String()
+		}
+	}
+
+	return peerIP
+}
+
 func (h *httpServer) acquireIPSlot(remoteAddr string) (string, bool) {
 	ip, _, err := net.SplitHostPort(remoteAddr)
 	if err != nil {
@@ -215,7 +321,27 @@ func (h *httpServer) acquireIPSlot(remoteAddr string) (string, bool) {
 	}
 	h.ipConnsMu.Lock()
 	defer h.ipConnsMu.Unlock()
-	if h.ipConns[ip] >= maxHTTPConnsPerIP {
+	if h.maxConnsPerIP <= 0 {
+		return "", true
+	}
+	if h.ipConns[ip] >= h.maxConnsPerIP {
+		return "", false
+	}
+	h.ipConns[ip]++
+	return ip, true
+}
+
+func (h *httpServer) acquireRequestIPSlot(r *http.Request) (string, bool) {
+	ip := h.clientIP(r)
+	if ip == "" {
+		return "", true
+	}
+	h.ipConnsMu.Lock()
+	defer h.ipConnsMu.Unlock()
+	if h.maxConnsPerIP <= 0 {
+		return "", true
+	}
+	if h.ipConns[ip] >= h.maxConnsPerIP {
 		return "", false
 	}
 	h.ipConns[ip]++
@@ -236,7 +362,8 @@ func (h *httpServer) releaseIPSlot(ip string) {
 }
 
 func (h *httpServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if ip, ok := h.acquireIPSlot(r.RemoteAddr); !ok {
+	if ip, ok := h.acquireRequestIPSlot(r); !ok {
+		w.Header().Set("Retry-After", "1")
 		http.Error(w, "too many concurrent requests from IP", http.StatusTooManyRequests)
 		return
 	} else {

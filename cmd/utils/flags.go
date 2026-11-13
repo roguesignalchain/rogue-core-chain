@@ -809,6 +809,18 @@ var (
 		Value:    "",
 		Category: flags.APICategory,
 	}
+	HTTPTrustedProxiesFlag = &cli.StringFlag{
+		Name:     "http.trustedproxies",
+		Usage:    "Comma separated list of trusted reverse proxy IPs or CIDRs allowed to supply X-Forwarded-For / X-Real-IP",
+		Value:    "",
+		Category: flags.APICategory,
+	}
+	HTTPMaxConnsPerIPFlag = &cli.IntFlag{
+		Name:     "http.maxconnsperip",
+		Usage:    "Maximum concurrent HTTP/WebSocket connections allowed per client IP (0 disables the limit)",
+		Value:    100,
+		Category: flags.APICategory,
+	}
 	GraphQLEnabledFlag = &cli.BoolFlag{
 		Name:     "graphql",
 		Usage:    "Enable GraphQL on the HTTP-RPC server. Note that GraphQL can only be started if an HTTP server is started as well.",
@@ -1367,6 +1379,13 @@ func setHTTP(ctx *cli.Context, cfg *node.Config) {
 
 	if ctx.IsSet(HTTPPathPrefixFlag.Name) {
 		cfg.HTTPPathPrefix = ctx.String(HTTPPathPrefixFlag.Name)
+	}
+	if ctx.IsSet(HTTPTrustedProxiesFlag.Name) {
+		cfg.HTTPTrustedProxies = SplitAndTrim(ctx.String(HTTPTrustedProxiesFlag.Name))
+	}
+	if ctx.IsSet(HTTPMaxConnsPerIPFlag.Name) {
+		limit := ctx.Int(HTTPMaxConnsPerIPFlag.Name)
+		cfg.HTTPMaxConnsPerIP = &limit
 	}
 	if ctx.IsSet(AllowUnprotectedTxs.Name) {
 		cfg.AllowUnprotectedTxs = ctx.Bool(AllowUnprotectedTxs.Name)

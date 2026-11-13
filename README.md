@@ -178,6 +178,8 @@ $$\text{Reward} = \left\lfloor \frac{25 \times 10^{18}}{2^{\text{Era}}} \right\r
   - Automatically dispatches `RandomX` consensus engine without falling back to Ethash or generating DAGs.
 
 ### 4. CLI Flags & Port Management (`cmd/utils/`)
+- **`cmd/utils/flags.go` & `node/rpcstack.go`**:
+  - Added `--rogue`, `--randomx.fast`, `--http.trustedproxies` (CIDR allowlist with Rightmost Untrusted IP `X-Forwarded-For` / `X-Real-IP` extraction), and `--http.maxconnsperip` (default `100` HTTP/WebSocket concurrent requests per client IP, returning `HTTP 429` with `Retry-After: 1`).
 - **`cmd/utils/flags.go`**:
   - Added `--rogue` flag to load Rogue Signal network configuration.
   - Added `--randomx.fast` flag to toggle Fast Mode.
