@@ -175,7 +175,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		} else if chainConfig.GetConsensusEngineType() == ctypes.ConsensusEngineT_RandomX {
 			randomxConfig = &randomx.Config{
 				FastMode: config.RandomXFast,
-				Threads:  1,
+				Threads:  -1,
 				Treasury: params.RogueTreasuryAddress,
 			}
 		}

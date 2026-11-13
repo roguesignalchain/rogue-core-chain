@@ -123,7 +123,11 @@ func ecbp1100(commonAncestor, current, proposed *types.Header, getTDFunc func(co
 	proposedSubchainTD := new(big.Int).Sub(proposedTD, commonAncestorTD)
 	localSubchainTD := new(big.Int).Sub(localTD, commonAncestorTD)
 
-	xBig := big.NewInt(int64(current.Time - commonAncestor.Time))
+	var timeDelta uint64
+	if current.Time > commonAncestor.Time {
+		timeDelta = current.Time - commonAncestor.Time
+	}
+	xBig := big.NewInt(int64(timeDelta))
 	eq := ecbp1100PolynomialV(xBig)
 	want := eq.Mul(eq, localSubchainTD)
 
@@ -137,7 +141,7 @@ func ecbp1100(commonAncestor, current, proposed *types.Header, getTDFunc func(co
 		return fmt.Errorf(`%w: ECBP1100-MESS 🔒 status=rejected age=%v current.span=%v proposed.span=%v tdr/gravity=%0.6f common.bno=%d common.hash=%s current.bno=%d current.hash=%s proposed.bno=%d proposed.hash=%s`,
 			errReorgFinality,
 			common.PrettyAge(time.Unix(int64(commonAncestor.Time), 0)),
-			common.PrettyDuration(time.Duration(current.Time-commonAncestor.Time)*time.Second),
+			common.PrettyDuration(time.Duration(timeDelta)*time.Second),
 			common.PrettyDuration(time.Duration(int32(xBig.Uint64()))*time.Second),
 			prettyRatio,
 			commonAncestor.Number.Uint64(), commonAncestor.Hash().Hex(),

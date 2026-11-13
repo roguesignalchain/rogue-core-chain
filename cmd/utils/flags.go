@@ -2047,6 +2047,8 @@ func SetEthConfig(ctx *cli.Context, stack *node.Node, cfg *ethconfig.Config) {
 		cfg.SyncMode = downloader.FullSync // dev sync target forces full sync
 	} else if ctx.IsSet(SyncModeFlag.Name) {
 		cfg.SyncMode = *flags.GlobalTextMarshaler(ctx, SyncModeFlag.Name).(*downloader.SyncMode)
+	} else if ctx.Bool(RogueFlag.Name) {
+		cfg.SyncMode = downloader.FullSync
 	}
 
 	if ctx.IsSet(CacheFlag.Name) || ctx.IsSet(CacheDatabaseFlag.Name) {

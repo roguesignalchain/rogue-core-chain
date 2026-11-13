@@ -471,3 +471,36 @@ func TestRogueChainConfigHardeningEIPs(t *testing.T) {
 		}
 	}
 }
+
+func TestRogueMESSNonMonotonicMTP11(t *testing.T) {
+	reader := &mockRogueHeaderReader{
+		headers: make(map[common.Hash]*types.Header),
+		tds:     make(map[common.Hash]*big.Int),
+	}
+
+	// Simulate an ancestor whose timestamp drifted +25s ahead, followed by a child
+	// whose timestamp is valid under MTP-11 (> median of past 11) yet <= commonAncestor.Time.
+	ancestor := &types.Header{Number: big.NewInt(10), Time: 2025, Difficulty: big.NewInt(100)}
+	current := &types.Header{ParentHash: ancestor.Hash(), Number: big.NewInt(11), Time: 2005, Difficulty: big.NewInt(100)}
+	proposed := &types.Header{ParentHash: ancestor.Hash(), Number: big.NewInt(11), Time: 2010, Difficulty: big.NewInt(150), Extra: []byte("fork")}
+
+	reader.headers[ancestor.Hash()] = ancestor
+	reader.tds[ancestor.Hash()] = big.NewInt(1000)
+	reader.headers[current.Hash()] = current
+	reader.tds[current.Hash()] = big.NewInt(1100)
+	reader.headers[proposed.Hash()] = proposed
+	reader.tds[proposed.Hash()] = big.NewInt(1150)
+
+	// Must not underflow uint64(current.Time - ancestor.Time); timeDelta clamps to 0 (gravity = 1x).
+	if err := ecbp1100(ancestor, current, proposed, reader.GetTd); err != nil {
+		t.Fatalf("expected non-monotonic MTP-11 fork with higher TD to pass MESS without underflow, got: %v", err)
+	}
+
+	// Lower TD on proposed must still be rejected cleanly without underflow.
+	weakProposed := &types.Header{ParentHash: ancestor.Hash(), Number: big.NewInt(11), Time: 2010, Difficulty: big.NewInt(50), Extra: []byte("weak")}
+	reader.headers[weakProposed.Hash()] = weakProposed
+	reader.tds[weakProposed.Hash()] = big.NewInt(1050)
+	if err := ecbp1100(ancestor, current, weakProposed, reader.GetTd); err == nil {
+		t.Fatal("expected lower-TD fork to be rejected by MESS")
+	}
+}
