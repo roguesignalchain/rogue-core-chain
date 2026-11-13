@@ -119,6 +119,9 @@ type RandomX struct {
 	nowFunc    func() uint64
 	randReader io.Reader
 
+	sealMu         sync.Mutex
+	activeSealDone chan struct{}
+
 	lock sync.RWMutex
 }
 
@@ -264,19 +267,21 @@ func (rx *RandomX) verifyHeader(chain consensus.ChainHeaderReader, header, paren
 		return fmt.Errorf("%w: have %d bytes, max %d bytes", ErrExtraDataTooLong, len(header.Extra), MaxExtraDataSize)
 	}
 
-	// 4. Verify strict timestamp rules (MTP-11 + max 30s future drift)
-	now := rx.currentUnixTime()
-	if err := VerifyHeaderTime(chain, header, parent, now); err != nil {
-		return err
-	}
-
-	// 5. Verify difficulty adjustment via LWMA-1
+	// 4 & 5. Compute LWMA-1 difficulty and MTP-11 in a single ancestor traversal,
+	// then verify strict timestamp rules (MTP-11 + max 30s future drift) and difficulty.
 	if header.Difficulty == nil || header.Difficulty.Sign() <= 0 {
 		return fmt.Errorf("invalid difficulty: %v", header.Difficulty)
 	}
-	expectedDifficulty, err := CalculateDifficulty(chain, header.Time, parent)
+	expectedDifficulty, mtp, err := CalculateDifficultyAndMTP11(chain, parent)
 	if err != nil {
 		return err
+	}
+	if header.Time <= mtp {
+		return ErrOlderBlockTime
+	}
+	now := rx.currentUnixTime()
+	if header.Time > now && header.Time-now > MaxFutureDrift {
+		return consensus.ErrFutureBlock
 	}
 	if header.Difficulty.Cmp(expectedDifficulty) != 0 {
 		return fmt.Errorf("invalid difficulty: have %v, want %v", header.Difficulty, expectedDifficulty)
@@ -590,7 +595,25 @@ func (rx *RandomX) VerifySeal(chain consensus.ChainHeaderReader, header *types.H
 		return ErrInvalidPoW
 	}
 
-	ctx, err := rx.epochs.GetContextForHeader(header, chain)
+	// Use Light Mode (256MB) when verifying historical-epoch headers on a Fast Mode node
+	// to avoid allocating a 2.08GB dataset or evicting active mining epochs.
+	var (
+		ctx *RxContext
+		err error
+	)
+	useLightForPastEpoch := false
+	if rx.IsFastMode() && chain != nil {
+		if head := chain.CurrentHeader(); head != nil && head.Number != nil && head.Number.IsUint64() {
+			if EpochNumber(number) < EpochNumber(head.Number.Uint64()) {
+				useLightForPastEpoch = true
+			}
+		}
+	}
+	if useLightForPastEpoch {
+		ctx, err = rx.epochs.GetLightContextForHeader(header, chain)
+	} else {
+		ctx, err = rx.epochs.GetContextForHeader(header, chain)
+	}
 	if err != nil {
 		return fmt.Errorf("failed to get RandomX context for block %d: %w", number, err)
 	}
@@ -651,9 +674,40 @@ func (rx *RandomX) Seal(chain consensus.ChainHeaderReader, block *types.Block, r
 		abortOnce  sync.Once
 	)
 
+	rx.sealMu.Lock()
+	prevDone := rx.activeSealDone
+	currDone := make(chan struct{})
+	rx.activeSealDone = currDone
+	rx.sealMu.Unlock()
+
 	// Mining (including epoch context/dataset initialization and VM prewarming) must run asynchronously
 	// to prevent blocking the worker's taskLoop, allowing immediate cancellation on stop or new heads.
 	go func() {
+		defer close(currDone)
+
+		// Wait for any previous sealing session to release its pooled VMs before starting
+		// a new session, preventing transient VM pool over-allocation on rapid recommits.
+		if prevDone != nil {
+			select {
+			case <-prevDone:
+			case <-stop:
+				return
+			}
+		}
+
+		// If MTP-11 forced header.Time beyond MaxFutureDrift, wait until the clock enters
+		// the valid drift window instead of wasting CPU mining a block that peers will reject.
+		if now := rx.currentUnixTime(); header.Time > now+MaxFutureDrift {
+			waitDur := time.Duration(header.Time-(now+MaxFutureDrift)) * time.Second
+			timer := time.NewTimer(waitDur)
+			select {
+			case <-stop:
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
+		}
+
 		select {
 		case <-stop:
 			return
@@ -716,7 +770,7 @@ func (rx *RandomX) Seal(chain consensus.ChainHeaderReader, block *types.Block, r
 					}
 
 					attempts++
-					if (attempts % 16) == 0 {
+					if (attempts % 64) == 0 {
 						rx.markAttempts(attempts)
 						attempts = 0
 					}

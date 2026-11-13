@@ -403,3 +403,58 @@ func TestResolvedSeedCacheCapacity(t *testing.T) {
 		t.Fatalf("expected 300 cached resolved seeds, got %d", gotLen)
 	}
 }
+
+func TestGetLightContextForHeader(t *testing.T) {
+	chain := NewFakeChainReader()
+	genesis := &types.Header{
+		Number:     big.NewInt(0),
+		Time:       1700000000,
+		Difficulty: big.NewInt(0x10000),
+	}
+	chain.AddHeader(genesis)
+
+	em := NewEpochManager(false)
+	defer em.Close()
+
+	// Seed a synthetic FastMode-tagged context in cache for epoch 0 to verify
+	// GetLightContextForHeader reuses an existing cached context when available.
+	seed0 := genesis.Hash()
+	em.mu.Lock()
+	em.epochSeeds[0] = seed0
+	em.mu.Unlock()
+
+	h1 := &types.Header{
+		ParentHash: genesis.Hash(),
+		Number:     big.NewInt(1),
+		Time:       genesis.Time + 30,
+		Difficulty: big.NewInt(0x10000),
+	}
+	chain.AddHeader(h1)
+
+	ctxLight, err := em.GetLightContextForHeader(h1, chain)
+	if err != nil {
+		t.Fatalf("GetLightContextForHeader failed: %v", err)
+	}
+	defer ctxLight.DecRef()
+
+	if ctxLight.fastMode {
+		t.Fatal("expected GetLightContextForHeader to initialize a Light Mode context when none is cached")
+	}
+
+	// Simulate FastMode flag enabled on EpochManager; GetLightContextForHeader must still
+	// return a Light Mode context for uncached seeds rather than allocating a 2.08GB dataset.
+	em.SetFastMode(true)
+	if !em.IsFastMode() {
+		t.Fatal("expected EpochManager FastMode to be true")
+	}
+
+	ctxReuse, err := em.GetLightContextForHeader(h1, chain)
+	if err != nil {
+		t.Fatalf("GetLightContextForHeader reuse failed: %v", err)
+	}
+	defer ctxReuse.DecRef()
+
+	if ctxReuse != ctxLight {
+		t.Fatal("expected GetLightContextForHeader to reuse already-cached Light context")
+	}
+}

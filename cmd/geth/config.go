@@ -118,8 +118,8 @@ func defaultNodeConfig() node.Config {
 	cfg := node.DefaultConfig
 	cfg.Name = databaseIdentifier
 	cfg.Version = params.VersionWithCommit(git.Commit, git.Date)
-	cfg.HTTPModules = append(cfg.HTTPModules, "eth", "rogue")
-	cfg.WSModules = append(cfg.WSModules, "eth", "rogue")
+	cfg.HTTPModules = append(cfg.HTTPModules, "eth")
+	cfg.WSModules = append(cfg.WSModules, "eth")
 	cfg.IPCPath = "geth.ipc"
 	return cfg
 }

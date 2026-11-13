@@ -2009,10 +2009,9 @@ func SetEthConfig(ctx *cli.Context, stack *node.Node, cfg *ethconfig.Config) {
 	CheckExclusive(ctx, DeveloperFlag, DeveloperPoWFlag, ExternalSignerFlag) // Can't use both ephemeral unlocked and external signer
 
 	if ctx.Bool(RandomXFastFlag.Name) {
-		if ctx.Bool(MiningEnabledFlag.Name) {
-			cfg.RandomXFast = true
-		} else {
-			log.Warn("Ignoring --randomx.fast because --mine is not enabled; using RandomX Light Mode (256MB)")
+		cfg.RandomXFast = true
+		if !ctx.Bool(MiningEnabledFlag.Name) {
+			log.Info("RandomX Fast Mode configured (~2.08GB); dataset will initialize when mining starts or fast verification runs")
 		}
 	}
 
@@ -2619,7 +2618,7 @@ func MakeChain(ctx *cli.Context, stack *node.Node, readonly bool) (*core.BlockCh
 	var randomxConfig *randomx.Config
 	if gspec != nil && gspec.Config != nil && gspec.Config.GetConsensusEngineType() == ctypes.ConsensusEngineT_RandomX {
 		randomxConfig = &randomx.Config{
-			FastMode: ctx.Bool(RandomXFastFlag.Name) && ctx.Bool(MiningEnabledFlag.Name),
+			FastMode: ctx.Bool(RandomXFastFlag.Name),
 			Threads:  ctx.Int(MinerThreadsFlag.Name),
 			Treasury: params.RogueTreasuryAddress,
 		}

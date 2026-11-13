@@ -121,13 +121,20 @@ func HashMeetsTarget(hash [32]byte, targetBE [32]byte) bool {
 //	where WeightedTimes = sum_{i=1}^{k} (i * solvetime_i)
 //	k = min(window, blockNumber)
 func CalculateDifficulty(chain consensus.ChainHeaderReader, time uint64, parent *types.Header) (*big.Int, error) {
+	diff, _, err := CalculateDifficultyAndMTP11(chain, parent)
+	return diff, err
+}
+
+// CalculateDifficultyAndMTP11 computes both the next LWMA-1 difficulty and the Past Median Time
+// (MTP-11) of parent in a single ancestor traversal to avoid duplicate header lookups during sync.
+func CalculateDifficultyAndMTP11(chain consensus.ChainHeaderReader, parent *types.Header) (*big.Int, uint64, error) {
 	if parent == nil || parent.Number == nil || !parent.Number.IsUint64() {
-		return nil, consensus.ErrUnknownAncestor
+		return nil, 0, consensus.ErrUnknownAncestor
 	}
 
 	parentNum := parent.Number.Uint64()
 	if parentNum == 0 {
-		return new(big.Int).Set(parent.Difficulty), nil
+		return new(big.Int).Set(parent.Difficulty), parent.Time, nil
 	}
 
 	targetTime := uint64(DefaultTargetBlockTime)
@@ -147,11 +154,14 @@ func CalculateDifficulty(chain consensus.ChainHeaderReader, time uint64, parent 
 	for i := int(k) - 1; i >= 0; i-- {
 		p := chain.GetHeader(curr.ParentHash, curr.Number.Uint64()-1)
 		if p == nil {
-			return nil, fmt.Errorf("%w: missing ancestor %d (%s) in LWMA window", consensus.ErrUnknownAncestor, curr.Number.Uint64()-1, curr.ParentHash.Hex())
+			return nil, 0, fmt.Errorf("%w: missing ancestor %d (%s) in LWMA window", consensus.ErrUnknownAncestor, curr.Number.Uint64()-1, curr.ParentHash.Hex())
 		}
 		headers[i] = p
 		curr = p
 	}
+
+	// Compute MTP-11 directly from the already-fetched tail of headers
+	mtp := medianTimeFromHeaders(headers)
 
 	// Calculate weighted solve times and average target over the window using monotonic timestamps
 	// to prevent out-of-order timestamp oscillation attacks under MTP-11.
@@ -189,7 +199,7 @@ func CalculateDifficulty(chain consensus.ChainHeaderReader, time uint64, parent 
 	// denominator = k * (k + 1) * targetTime / 2
 	denominator := (k * (k + 1) * targetTime) / 2
 	if denominator == 0 {
-		return new(big.Int).Set(parent.Difficulty), nil
+		return new(big.Int).Set(parent.Difficulty), mtp, nil
 	}
 
 	// nextTarget = (avgTarget * weightedTimes) / denominator
@@ -223,7 +233,34 @@ func CalculateDifficulty(chain consensus.ChainHeaderReader, time uint64, parent 
 		nextDiff.Set(MinDifficulty)
 	}
 
-	return nextDiff, nil
+	return nextDiff, mtp, nil
+}
+
+func medianTimeFromHeaders(headers []*types.Header) uint64 {
+	n := len(headers)
+	if n == 0 {
+		return 0
+	}
+	start := 0
+	if n > MTPWindow {
+		start = n - MTPWindow
+	}
+	count := n - start
+	var buf [MTPWindow]uint64
+	times := buf[:count]
+	for i := 0; i < count; i++ {
+		times[i] = headers[n-1-i].Time
+	}
+	for i := 1; i < len(times); i++ {
+		key := times[i]
+		j := i - 1
+		for j >= 0 && times[j] > key {
+			times[j+1] = times[j]
+			j--
+		}
+		times[j+1] = key
+	}
+	return times[len(times)/2]
 }
 
 // CalculateMTP11 calculates the Past Median Time (MTP-11) for strict header validation.

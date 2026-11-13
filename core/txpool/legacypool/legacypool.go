@@ -604,12 +604,16 @@ func (pool *LegacyPool) local() map[common.Address]types.Transactions {
 // This check is meant as an early check which only needs to be performed once,
 // and does not require the pool mutex to be held.
 func (pool *LegacyPool) validateTxBasics(tx *types.Transaction, local bool) error {
+	accept := uint8(0 |
+		1<<types.LegacyTxType |
+		1<<types.AccessListTxType |
+		1<<types.DynamicFeeTxType)
+	if pool.chainconfig != nil && pool.chainconfig.GetConsensusEngineType().IsRandomX() {
+		accept = 1 << types.LegacyTxType
+	}
 	opts := &txpool.ValidationOptions{
-		Config: pool.chainconfig,
-		Accept: 0 |
-			1<<types.LegacyTxType |
-			1<<types.AccessListTxType |
-			1<<types.DynamicFeeTxType,
+		Config:  pool.chainconfig,
+		Accept:  accept,
 		MaxSize: txMaxSize,
 		MinTip:  pool.gasTip.Load().ToBig(),
 	}

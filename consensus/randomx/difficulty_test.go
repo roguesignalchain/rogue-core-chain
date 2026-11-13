@@ -298,3 +298,49 @@ func (f *FakeChainReader) GetHeaderByHash(hash common.Hash) *types.Header {
 func (f *FakeChainReader) GetTd(hash common.Hash, number uint64) *big.Int {
 	return big.NewInt(1)
 }
+
+func TestCalculateDifficultyAndMTP11Parity(t *testing.T) {
+	chain := NewFakeChainReader()
+	genesis := &types.Header{
+		Number:     big.NewInt(0),
+		Time:       1700000000,
+		Difficulty: big.NewInt(0x10000),
+	}
+	chain.AddHeader(genesis)
+
+	parent := genesis
+	// Verify parity across both short (< 11 blocks) and full (> 60 blocks) windows.
+	for i := int64(1); i <= 75; i++ {
+		delta := uint64(30)
+		if i%5 == 0 {
+			delta = 12 // Introduce realistic timestamp jitter
+		} else if i%7 == 0 {
+			delta = 48
+		}
+		h := &types.Header{
+			ParentHash: parent.Hash(),
+			Number:     big.NewInt(i),
+			Time:       parent.Time + delta,
+			Difficulty: big.NewInt(0x10000 + i*100),
+		}
+		chain.AddHeader(h)
+
+		gotDiff, gotMTP, err := CalculateDifficultyAndMTP11(chain, h)
+		if err != nil {
+			t.Fatalf("block %d: CalculateDifficultyAndMTP11 failed: %v", i, err)
+		}
+		wantDiff, err := CalculateDifficulty(chain, h.Time, h)
+		if err != nil {
+			t.Fatalf("block %d: CalculateDifficulty failed: %v", i, err)
+		}
+		wantMTP := CalculateMTP11(chain, h)
+
+		if gotDiff.Cmp(wantDiff) != 0 {
+			t.Fatalf("block %d: difficulty mismatch: got %v, want %v", i, gotDiff, wantDiff)
+		}
+		if gotMTP != wantMTP {
+			t.Fatalf("block %d: MTP-11 mismatch: got %d, want %d", i, gotMTP, wantMTP)
+		}
+		parent = h
+	}
+}

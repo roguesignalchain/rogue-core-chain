@@ -62,7 +62,7 @@ type Config struct {
 
 // DefaultConfig contains default settings for miner.
 var DefaultConfig = Config{
-	GasCeil:  60000000,
+	GasCeil:  50000000,
 	GasPrice: big.NewInt(vars.GWei),
 
 	// The default recommit time is 10s for Rogue Signal (30s block time)

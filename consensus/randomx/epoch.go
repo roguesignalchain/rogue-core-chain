@@ -244,12 +244,22 @@ func (em *EpochManager) GetContext(blockNum uint64, chain consensus.ChainHeaderR
 	if err != nil {
 		return nil, err
 	}
-	return em.getContextBySeed(epoch, seed)
+	return em.getContextBySeed(epoch, seed, em.IsFastMode())
 }
 
 // GetContextForHeader returns the execution context for a specific header, resolving its seed
 // along the header's own ancestor branch so side-fork blocks across epoch boundaries verify accurately.
 func (em *EpochManager) GetContextForHeader(header *types.Header, chain consensus.ChainHeaderReader) (*RxContext, error) {
+	return em.getContextForHeaderMode(header, chain, em.IsFastMode())
+}
+
+// GetLightContextForHeader returns a Light Mode (~256MB) execution context for verifying
+// historical-epoch headers without allocating a 2.08GB FastDataset or evicting active mining epochs.
+func (em *EpochManager) GetLightContextForHeader(header *types.Header, chain consensus.ChainHeaderReader) (*RxContext, error) {
+	return em.getContextForHeaderMode(header, chain, false)
+}
+
+func (em *EpochManager) getContextForHeaderMode(header *types.Header, chain consensus.ChainHeaderReader, fastMode bool) (*RxContext, error) {
 	if header == nil || header.Number == nil || !header.Number.IsUint64() {
 		return nil, consensus.ErrInvalidNumber
 	}
@@ -258,23 +268,21 @@ func (em *EpochManager) GetContextForHeader(header *types.Header, chain consensu
 	if err != nil {
 		return nil, err
 	}
-	return em.getContextBySeed(epoch, seed)
+	return em.getContextBySeed(epoch, seed, fastMode)
 }
 
-func (em *EpochManager) getContextBySeed(epoch uint64, seed common.Hash) (*RxContext, error) {
+func (em *EpochManager) getContextBySeed(epoch uint64, seed common.Hash, targetFast bool) (*RxContext, error) {
 	for {
 		em.mu.RLock()
 		ctx, exists := em.contexts[seed]
-		targetFast := em.fastMode
-		if exists && ctx != nil && ctx.fastMode == targetFast && ctx.IncRef() {
+		if exists && ctx != nil && (ctx.fastMode == targetFast || (!targetFast && ctx.fastMode)) && ctx.IncRef() {
 			em.mu.RUnlock()
 			return ctx, nil
 		}
 		em.mu.RUnlock()
 
 		em.mu.Lock()
-		targetFast = em.fastMode
-		if ctx, exists = em.contexts[seed]; exists && ctx != nil && ctx.fastMode == targetFast && ctx.IncRef() {
+		if ctx, exists = em.contexts[seed]; exists && ctx != nil && (ctx.fastMode == targetFast || (!targetFast && ctx.fastMode)) && ctx.IncRef() {
 			em.mu.Unlock()
 			return ctx, nil
 		}
@@ -406,7 +414,7 @@ func (em *EpochManager) PrecomputeNextEpoch(blockNum uint64, chain consensus.Cha
 			em.epochSeeds[nextEpoch] = seed
 			em.mu.Unlock()
 
-			if ctx, err := em.getContextBySeed(nextEpoch, seed); err == nil && ctx != nil {
+			if ctx, err := em.getContextBySeed(nextEpoch, seed, targetFast); err == nil && ctx != nil {
 				ctx.DecRef()
 			}
 		}()
