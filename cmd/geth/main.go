@@ -356,7 +356,7 @@ func checkMainnet(ctx *cli.Context) bool {
 	case ctx.IsSet(utils.MintMeFlag.Name):
 		log.Info("Starting Geth on MintMe.com Coin mainnet...")
 
-	case ctx.IsSet(utils.RogueFlag.Name):
+	case ctx.IsSet(utils.RogueFlag.Name) || ctx.Uint64(utils.NetworkIdFlag.Name) == 800055:
 		printRogueBanner(ctx)
 		log.Info("Starting Geth on Rogue Signal network...")
 

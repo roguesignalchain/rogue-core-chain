@@ -18,9 +18,9 @@ librandomx: $(RANDOMX_LIB)
 
 # Architecture selection: default for universal binary portability (SIGILL safe), or native for local tuning
 ifeq ($(NATIVE),1)
-	RX_ARCH ?= native
+RX_ARCH ?= native
 else
-	RX_ARCH ?= default
+RX_ARCH ?= default
 endif
 
 $(RANDOMX_LIB):
