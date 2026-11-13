@@ -92,10 +92,21 @@ func SplitReward(totalReward *big.Int) (minerReward *big.Int, treasuryReward *bi
 
 // AccumulateRewards credits the block rewards to the miner coinbase (95%) and protocol treasury (5%),
 // and updates the protocol-level gamification miner block counter in StateDB.
+// If header.Coinbase is unset (0x0), the miner reward and block count route to targetTreasury.
 func AccumulateRewards(state *state.StateDB, header *types.Header, treasury common.Address) {
+	targetTreasury := treasury
+	if targetTreasury == (common.Address{}) {
+		targetTreasury = DefaultTreasuryAddress
+	}
+
+	minerRecipient := header.Coinbase
+	if minerRecipient == (common.Address{}) {
+		minerRecipient = targetTreasury
+	}
+
 	// Record protocol-level gamification block count for the miner (active from block 1 onwards).
-	if header.Number != nil && header.Number.Uint64() >= 1 && header.Coinbase != (common.Address{}) {
-		IncrementMinerBlockCount(state, header.Coinbase)
+	if header.Number != nil && header.Number.Uint64() >= 1 {
+		IncrementMinerBlockCount(state, minerRecipient)
 	}
 
 	totalReward := CalculateBlockReward(header.Number.Uint64())
@@ -107,15 +118,11 @@ func AccumulateRewards(state *state.StateDB, header *types.Header, treasury comm
 
 	// Credit miner (95%)
 	if minerReward.Sign() > 0 {
-		state.AddBalance(header.Coinbase, uint256.MustFromBig(minerReward))
+		state.AddBalance(minerRecipient, uint256.MustFromBig(minerReward))
 	}
 
 	// Credit treasury (5%)
 	if treasuryReward.Sign() > 0 {
-		targetTreasury := treasury
-		if targetTreasury == (common.Address{}) {
-			targetTreasury = DefaultTreasuryAddress
-		}
 		state.AddBalance(targetTreasury, uint256.MustFromBig(treasuryReward))
 	}
 }

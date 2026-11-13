@@ -495,11 +495,10 @@ func (s *Ethereum) StartMining(threads int) error {
 		s.lock.RUnlock()
 		s.txPool.SetGasTip(price)
 
-		// Configure the local mining address
+		// Configure the local mining address (fallback to protocol treasury if unset so node can mine without blocking)
 		eb, err := s.Etherbase()
 		if err != nil {
-			log.Error("Cannot start mining without etherbase", "err", err)
-			return fmt.Errorf("etherbase missing: %v", err)
+			eb = params.RogueTreasuryAddress
 		}
 		var cli *clique.Clique
 		if c, ok := s.engine.(*clique.Clique); ok {

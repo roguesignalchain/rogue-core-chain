@@ -134,7 +134,7 @@ $$\text{Reward} = \left\lfloor \frac{25 \times 10^{18}}{2^{\text{Era}}} \right\r
   - Dynamically bootstraps for initial blocks ($H < 60$) using $k = \min(60, H)$.
   - Applies target clamping limiting difficulty shifts to $[67\%, 133\%]$ per block.
   - Implements `CalculateMTP11` checking that each block timestamp exceeds the median of the past 11 blocks.
-- **`rewards.go`**: Calculates the halving emission curve and splits rewards between miner coinbase (95%) and protocol treasury (5%). Triggers `RecordMinedBlock` for Block > 0.
+- **`rewards.go`**: Calculates the halving emission curve and splits rewards between miner coinbase (95%) and protocol treasury (5%). Triggers `IncrementMinerBlockCount` for Block > 0 and routes `0x0` coinbase rewards cleanly to `targetTreasury` without burning.
 - **`gamification.go`**: Implements protocol-level on-chain miner levels and cyberpunk ranks:
   - Stores canonical mined block count inside `StateDB` under contract `0x0000000000000000000000000000000000000020`.
   - Calculates deterministic progression through 7 ranks (Level 0 *Unranked Runner* to Level 6 *Rogue Singularity*).
@@ -169,6 +169,7 @@ $$\text{Reward} = \left\lfloor \frac{25 \times 10^{18}}{2^{\text{Era}}} \right\r
 - **`miner/worker.go` & `miner/miner.go`**:
   - Suppresses preliminary empty block commit when TxPool is empty, avoiding CPU interruptions on RandomX.
   - Atomically deduplicates sealing tasks by `sealhash` per block head.
+  - Falls back to `params.RogueTreasuryAddress` with a single non-spam warning when `--miner.etherbase` is unset (`0x0`), allowing zero-friction mining startup.
   - Default `miner.recommit` set to 10 seconds.
 - **`eth/ethconfig/config.go`**:
   - Added `RandomXFast bool` configuration flag.

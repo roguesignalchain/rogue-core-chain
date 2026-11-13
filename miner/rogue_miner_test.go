@@ -86,3 +86,36 @@ func TestRogueWorkerStopAndEngineReset(t *testing.T) {
 		t.Fatalf("expected RandomX hashrate 0 after SetThreads(-1), got %f", rate)
 	}
 }
+
+func TestRogueWorkerZeroEtherbaseFallbackAndWarnReset(t *testing.T) {
+	w := &worker{}
+
+	// Initially unset (0x0)
+	if w.etherbase() != (common.Address{}) {
+		t.Fatalf("expected initial etherbase to be zero, got %x", w.etherbase())
+	}
+
+	// Simulate first fallback warning trigger
+	if !w.warnedNoEtherbase.CompareAndSwap(false, true) {
+		t.Fatal("expected initial warnedNoEtherbase CAS to succeed")
+	}
+	if w.warnedNoEtherbase.CompareAndSwap(false, true) {
+		t.Fatal("expected second warnedNoEtherbase CAS to be suppressed (anti-spam)")
+	}
+
+	// Setting a valid etherbase must reset the warning flag
+	validAddr := common.HexToAddress("0x1111111111111111111111111111111111111111")
+	w.setEtherbase(validAddr)
+	if w.etherbase() != validAddr {
+		t.Fatalf("expected etherbase %x, got %x", validAddr, w.etherbase())
+	}
+	if w.warnedNoEtherbase.Load() {
+		t.Fatal("expected warnedNoEtherbase to reset when a valid etherbase is set")
+	}
+
+	// Clearing etherbase back to 0x0 must allow a single warning again
+	w.setEtherbase(common.Address{})
+	if !w.warnedNoEtherbase.CompareAndSwap(false, true) {
+		t.Fatal("expected warnedNoEtherbase to fire once again after clearing etherbase")
+	}
+}

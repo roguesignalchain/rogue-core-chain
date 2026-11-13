@@ -3,6 +3,11 @@ package randomx
 import (
 	"math/big"
 	"testing"
+
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/ethereum/go-ethereum/core/state"
+	"github.com/ethereum/go-ethereum/core/types"
 )
 
 func TestBlockRewardHalving(t *testing.T) {
@@ -81,4 +86,35 @@ func TestMaxSupplyCapCompliance(t *testing.T) {
 
 	// Verify exact convergence to 100,000,000.000000000000000000 ROGUE
 	t.Logf("Total calculated max supply over 32 eras: %s Wei (exactly 100,000,000 ROGUE)", total.String())
+}
+
+func TestAccumulateRewardsZeroCoinbaseFallbackToTreasury(t *testing.T) {
+	sdb, err := state.New(types.EmptyRootHash, state.NewDatabase(rawdb.NewMemoryDatabase()), nil)
+	if err != nil {
+		t.Fatalf("failed to create stateDB: %v", err)
+	}
+
+	header := &types.Header{
+		Number:   big.NewInt(1),
+		Coinbase: common.Address{}, // Unset 0x0 coinbase
+	}
+
+	AccumulateRewards(sdb, header, DefaultTreasuryAddress)
+
+	// 100% of Era 0 block reward (25 ROGUE) must go to DefaultTreasuryAddress
+	expected := new(big.Int).Mul(big.NewInt(25), WeiPerROGUE)
+	got := sdb.GetBalance(DefaultTreasuryAddress).ToBig()
+	if got.Cmp(expected) != 0 {
+		t.Fatalf("expected treasury balance %v, got %v", expected, got)
+	}
+
+	// Zero address must remain untouched
+	if zeroBal := sdb.GetBalance(common.Address{}); zeroBal.Sign() != 0 {
+		t.Fatalf("expected zero address balance 0, got %v", zeroBal)
+	}
+
+	// Gamification block count must credit DefaultTreasuryAddress
+	if blocks := GetMinerBlockCount(sdb, DefaultTreasuryAddress); blocks != 1 {
+		t.Fatalf("expected treasury gamification count 1, got %d", blocks)
+	}
 }
