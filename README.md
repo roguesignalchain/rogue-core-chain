@@ -61,7 +61,7 @@
 | **Total Max Supply** | **100,000,000 ROGUE** | Exact mathematical hard cap across 32 halving eras (zero tail emission) |
 | **Initial Block Reward**| **25 ROGUE** | Halves every 2,000,000 blocks (~1.90 years at 30s/block) |
 | **Reward Split** | **95% Miner / 5% Treasury** | 23.75 ROGUE to miner coinbase (+ 100% tx fees), 1.25 ROGUE to protocol treasury |
-| **Treasury Address** | `0xe9aaE535B7971A9AC8C6af0e4B524D02260D3a03` | Hardcoded default fallback; configurable in `genesis.json` |
+| **Treasury Address** | `0xe9aaE535B7971A9AC8C6af0e4B524D02260D3a03` | Protocol development treasury address (`params/config_rogue.go`) |
 | **Uncle Blocks** | **Strictly Forbidden (0%)** | Uncle headers rejected (`ErrUnclesNotAllowed`), simplifying state tree |
 | **Seed Rotation** | **Every 2048 blocks (~17.07h)** | Rotates RandomX VM key every 2048 blocks with canonical reorg validation |
 | **Seed Lag** | **64 blocks (~32m)** | Next epoch seed is locked 64 blocks early (`runtime.NumCPU()/2` precompute) |
@@ -284,17 +284,17 @@ CGO_ENABLED=1 go test -v -run TestSealAndVerifySealIntegration    # End-to-end R
 
 ### 1. Initializing the Blockchain
 
-Before starting a node for the first time, initialize its database with `genesis.json`:
+Before starting a node for the first time, you can initialize its database using the embedded Rogue Signal genesis (no external `genesis.json` file is required; starting directly with `--rogue` also initializes it automatically):
 
 ```bash
-# Initialize custom datadir
-./build/bin/core-rogue --datadir /path/to/data init genesis.json
+# Initialize custom datadir with embedded genesis
+./build/bin/core-rogue --rogue --datadir /path/to/data init
 ```
 
 Output confirmation:
 ```
-INFO Wrote genesis block OK config="Chain ID: 800055 (rogue-signal) Consensus: RandomX rx/0 (proof-of-work, ASIC-resistant)"
-INFO Successfully wrote genesis state database=chaindata hash=fbdc74..8a1a27
+INFO Wrote genesis block OK config="NetworkID: 800055, ChainID: 800055 Engine: randomx ECBP1100: 0 ..."
+INFO Successfully wrote genesis state database=chaindata hash=f30f17..b490b7
 ```
 
 ### 2. Starting a Full Validator Node

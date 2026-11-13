@@ -16,7 +16,7 @@ make librandomx
 # 2. Extract git commit and timestamp for metadata injection
 GIT_COMMIT="$(git rev-parse HEAD 2>/dev/null || echo "unknown")"
 GIT_DATE="$(git log -1 --format=%cd --date=format:%Y%m%d 2>/dev/null || date +%Y%m%d)"
-VERSION="1.12.24-unstable"
+VERSION="$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.1.0")"
 
 echo "-> Git Commit : ${GIT_COMMIT}"
 echo "-> Git Date   : ${GIT_DATE}"

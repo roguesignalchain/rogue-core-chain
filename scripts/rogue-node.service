@@ -13,7 +13,7 @@ Wants=network-online.target
 Type=simple
 User=rogue
 Environment="ROGUE_DATADIR=/var/lib/rogue-signal/chaindata"
-ExecStartPre=/usr/local/bin/core-rogue --rogue --datadir ${ROGUE_DATADIR} init /etc/rogue-signal/genesis.json
+ExecStartPre=/usr/local/bin/core-rogue --rogue --datadir ${ROGUE_DATADIR} init
 ExecStart=/usr/local/bin/core-rogue \
     --rogue \
     --datadir ${ROGUE_DATADIR} \

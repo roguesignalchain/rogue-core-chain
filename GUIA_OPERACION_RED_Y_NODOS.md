@@ -67,8 +67,8 @@ cd /media/carlos/DATA1/DEV/blockchain_pow
 # 1. Crear directorio para el nodo inicial
 mkdir -p data-node1
 
-# 2. Inicializar la base de datos con el genesis.json
-./rogue-core-chain/build/bin/geth --datadir ./data-node1 init genesis.json
+# 2. Inicializar la base de datos con el génesis embebido de Rogue Signal
+./rogue-core-chain/build/bin/core-rogue --rogue --datadir ./data-node1 init
 ```
 
 Verás una salida similar a:
@@ -152,8 +152,8 @@ cd /media/carlos/DATA1/DEV/blockchain_pow
 # 1. Crear directorio para el Nodo 2
 mkdir -p data-node2
 
-# 2. Inicializar con el mismo archivo génesis
-./rogue-core-chain/build/bin/geth --datadir ./data-node2 init genesis.json
+# 2. Inicializar con el génesis embebido de Rogue Signal
+./rogue-core-chain/build/bin/core-rogue --rogue --datadir ./data-node2 init
 
 # 3. Iniciar Nodo 2 especificando el Nodo 1 como bootnode y usando puertos alternos
 ./rogue-core-chain/build/bin/geth \
@@ -334,9 +334,9 @@ Una vez abierta la aplicación gráfica:
 - **Solución**: Desactiva el Fast Mode (ejecuta en Light Mode, que solo requiere ~256 MB de RAM).
 
 ### Los nodos no se conectan entre sí (`net.peerCount == 0`)
-- **Causa**: Ambos nodos deben tener exactamente el mismo `genesis.json` inicializado. Si el hash del bloque 0 no coincide, los nodos rechazarán el apretón de manos (handshake).
+- **Causa**: Ambos nodos deben estar inicializados con exactamente el mismo bloque génesis de Rogue Signal (`0xf30f17...b490b7`). Si el hash del bloque 0 no coincide, los nodos rechazarán el apretón de manos (handshake).
 - **Solución**:
-  1. Verifica que ambos se hayan inicializado con `init genesis.json`.
+  1. Verifica que ambos se hayan inicializado y ejecutado con `--rogue` (génesis embebido).
   2. En el Nodo 2, ejecuta manualmente `admin.addPeer("<enode_del_nodo_1>")`.
   3. Verifica que el firewall o puerto local `38888` permita tráfico TCP y UDP.
 

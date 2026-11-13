@@ -20,17 +20,11 @@ if [ ! -f "${CORE_DIR}/build/bin/core-rogue" ]; then
 fi
 
 rm -rf "${PKG_DIR}" "${DIST_DIR}/${PKG_NAME}.tar.gz"
-mkdir -p "${PKG_DIR}/bin" "${PKG_DIR}/scripts" "${PKG_DIR}/config"
+mkdir -p "${PKG_DIR}/bin" "${PKG_DIR}/scripts"
 
 # 2. Copy artifacts
 cp "${CORE_DIR}/build/bin/core-rogue" "${PKG_DIR}/bin/core-rogue"
 chmod +x "${PKG_DIR}/bin/core-rogue"
-
-if [ -f "${CORE_DIR}/genesis.json" ]; then
-    cp "${CORE_DIR}/genesis.json" "${PKG_DIR}/config/genesis.json"
-elif [ -f "${WORKSPACE_ROOT}/genesis.json" ]; then
-    cp "${WORKSPACE_ROOT}/genesis.json" "${PKG_DIR}/config/genesis.json"
-fi
 
 cp "${SCRIPT_DIR}/rogue-node.service" "${PKG_DIR}/scripts/"
 cp "${SCRIPT_DIR}/install-service.sh" "${PKG_DIR}/scripts/"
@@ -52,11 +46,11 @@ Rogue Signal (ROGUE) Headless Core Node v${VERSION}
 ===================================================
 Chain ID : 800055
 Mining   : RandomX (rx/0)
-Block Time: 10 seconds
+Block Time: 30 seconds
 
 QUICK START:
 1. Initialize genesis:
-   ./bin/core-rogue --rogue --datadir ~/.local/share/rogue-signal/chaindata init ./config/genesis.json
+   ./bin/core-rogue --rogue --datadir ~/.local/share/rogue-signal/chaindata init
 
 2. Run node:
    ./bin/core-rogue --rogue --datadir ~/.local/share/rogue-signal/chaindata --http --http.addr 127.0.0.1 --http.port 38845 --http.api eth,net,web3,rogue --port 38888

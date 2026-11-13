@@ -13,17 +13,6 @@ MINE="false"
 THREADS="2"
 COINBASE=""
 
-# Resolve genesis source
-if [ -f "${SCRIPT_DIR}/../config/genesis.json" ]; then
-    GENESIS_SRC="${SCRIPT_DIR}/../config/genesis.json"
-elif [ -f "${CORE_DIR}/genesis.json" ]; then
-    GENESIS_SRC="${CORE_DIR}/genesis.json"
-elif [ -f "${WORKSPACE_ROOT}/genesis.json" ]; then
-    GENESIS_SRC="${WORKSPACE_ROOT}/genesis.json"
-else
-    GENESIS_SRC="/etc/rogue-signal/genesis.json"
-fi
-
 # Resolve core-rogue binary
 if [ -f "${SCRIPT_DIR}/../bin/core-rogue" ]; then
     BIN_SRC="${SCRIPT_DIR}/../bin/core-rogue"
@@ -77,10 +66,8 @@ mkdir -p "${DATADIR}"
 
 # Initialize genesis if not yet initialized
 if [ ! -d "${DATADIR}/geth/chaindata" ]; then
-    echo "Initializing genesis block (Chain ID 800055)..."
-    if [ -f "${GENESIS_SRC}" ]; then
-        "${BIN_SRC}" --rogue --datadir "${DATADIR}" init "${GENESIS_SRC}"
-    fi
+    echo "Initializing embedded Rogue Signal genesis block (Chain ID 800055)..."
+    "${BIN_SRC}" --rogue --datadir "${DATADIR}" init
 fi
 
 # Configure miner arguments
