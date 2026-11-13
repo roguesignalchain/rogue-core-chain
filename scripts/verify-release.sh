@@ -88,7 +88,7 @@ if [ -d "${CORE_DIR}/.git" ]; then
     if [ -n "${HEX64_CORE}" ]; then
         HEX64_COUNT="$(printf '%s\n' "${HEX64_CORE}" | wc -l)"
         echo "WARNING: Found ${HEX64_COUNT} 64-char hex literal(s) in rogue-core-chain (review for raw private keys vs genesis/test hashes):"
-        printf '%s\n' "${HEX64_CORE}" | head -n 20
+        printf '%s\n' "${HEX64_CORE}" | sed -n '1,20p'
         if [ "${HEX64_COUNT}" -gt 20 ]; then
             echo "... (truncated; run git grep -I -n -E '(0x|\")[0-9a-fA-F]{64}' to inspect all ${HEX64_COUNT} matches)"
         fi
@@ -125,7 +125,7 @@ if [ -d "${WORKSPACE_ROOT}/rogue-desktop-client/.git" ]; then
     if [ -n "${HEX64_DESKTOP}" ]; then
         HEX64_D_COUNT="$(printf '%s\n' "${HEX64_DESKTOP}" | wc -l)"
         echo "WARNING: Found ${HEX64_D_COUNT} 64-char hex literal(s) in rogue-desktop-client (review for raw private keys vs hashes):"
-        printf '%s\n' "${HEX64_DESKTOP}" | head -n 20
+        printf '%s\n' "${HEX64_DESKTOP}" | sed -n '1,20p'
         if [ "${HEX64_D_COUNT}" -gt 20 ]; then
             echo "... (truncated; inspect rogue-desktop-client manually)"
         fi
