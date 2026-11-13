@@ -66,7 +66,7 @@
 | **Seed Rotation** | **Every 2048 blocks (~17.07h)** | Rotates RandomX VM key every 2048 blocks with canonical reorg validation |
 | **Seed Lag** | **64 blocks (~32m)** | Next epoch seed is locked 64 blocks early (`runtime.NumCPU()/2` precompute) |
 | **Cache Retention** | **128 blocks (~64m)** | Retains previous epoch cache in RAM to validate chain reorganizations |
-| **Genesis Block Hash** | `0xf30f172028b07950de58d2cb4d65593793c183fcd0f86c9c24c5d4a037b490b7` | Anchored in `RequireBlockHashes[0]` |
+| **Genesis Block Hash** | `0xde4c5e747fbb072d39db2ece5a245e46b6164045e166301dfdba78f86cfbe4dd` | Anchored in `RequireBlockHashes[0]` |
 | **SealHash Format** | RLP(Header without Nonce & MixDigest) | Canonical Ethereum RLP serialization excluding mutable seal fields |
 | **MixDigest** | 32-byte RandomX hash | Direct PoW inclusion proof stored in header |
 | **Default P2P Port** | **`38888`** | Dedicated port avoiding Ethereum/ETC discovery collisions |
@@ -74,7 +74,7 @@
 | **Default WS RPC** | **`38846`** | Dedicated WebSocket port |
 | **Remote Mining RPC** | **Disabled** | `eth_getWork` and `eth_submitWork` are disabled to block Stratum pools and rigs |
 | **EVM Fork Base** | **Cancun / Shanghai (Classical PoW)** | `PUSH0`, `MCOPY`, `TSTORE/TLOAD` enabled from block 0 (100% fees to miner) |
-| **Miner Gamification**| **7 Cyberpunk Tiers** | On-chain persistence in `StateDB` at `0x...0020`, queried via `rogue_getMinerLevel` / `rogue_getMinerStats` |
+| **Miner Gamification**| **7 Cyberpunk Tiers** | On-chain EVM System Contract at `0x...0020` (Block 0), queried via `eth_call` / `STATICCALL` |
 
 ---
 
@@ -115,7 +115,7 @@ $$\text{Reward} = \left\lfloor \frac{25 \times 10^{18}}{2^{\text{Era}}} \right\r
 │  ├── difficulty.go : LWMA-1 (N=60, T=30s, clamp +-33%, MTP-11)         │
 │  ├── rewards.go    : 25 ROGUE base, 2.0M halving, 95%/5% split, 100M   │
 │  ├── epoch.go      : 2048-block epoch manager, 64-block lag, reorg safe│
-│  ├── gamification.go: StateDB persistence at 0x...0020, 7 Cyberpunk ranks│
+│  ├── gamification.go: StateDB block counter at 0x...0020 (Slot 1)      │
 │  ├── randomx.go    : SealHash, 2-phase VerifyHeaders, MaxExtraData 64B │
 │  └── rx_cgo.go     : CGO bindings to librandomx.a (UAF-safe RLock)     │
 └───────────────────────────────────┬────────────────────────────────────┘
@@ -135,11 +135,11 @@ $$\text{Reward} = \left\lfloor \frac{25 \times 10^{18}}{2^{\text{Era}}} \right\r
   - Applies target clamping limiting difficulty shifts to $[67\%, 133\%]$ per block.
   - Implements `CalculateMTP11` checking that each block timestamp exceeds the median of the past 11 blocks.
 - **`rewards.go`**: Calculates the halving emission curve and splits rewards between miner coinbase (95%) and protocol treasury (5%). Triggers `IncrementMinerBlockCount` for Block > 0 and routes `0x0` coinbase rewards cleanly to `targetTreasury` without burning.
-- **`gamification.go`**: Implements protocol-level on-chain miner levels and cyberpunk ranks:
-  - Stores canonical mined block count inside `StateDB` under contract `0x0000000000000000000000000000000000000020`.
-  - Calculates deterministic progression through 7 ranks (Level 0 *Unranked Runner* to Level 6 *Rogue Singularity*).
+- **`gamification.go` & `params/rogue_reputation_bytecode.go`**: Protocol-level PoW reputation persistence:
+  - Stores canonical mined block counts inside `StateDB` at system contract `0x0000000000000000000000000000000000000020` (Solidity mapping slot `1`: `keccak256(abi.encode(miner, 1))`).
+  - The `RogueMinerReputation` EVM contract bytecode is deployed at Block 0 via `Genesis.Alloc` (`params/genesis_rogue.go`) with `Ownable._owner` (slot `0`) initialized to `RogueTreasuryAddress`, serving as the single on-chain source of truth for ranks, XP, localized titles, and badge URIs.
   - Handles reorganization rewinding natively with the canonical state trie.
-- **`api.go`**: Exposes the `rogue` and `randomx` RPC namespaces (`rogue_getMinerLevel`, `rogue_getMinerStats`, `rogue_getConsensusStatus`, `randomx_getEpochInfo`).
+- **`api.go`**: Exposes `eth` (read-only/stub PoW methods) and `randomx` (`randomx_getConsensusStatus`, `randomx_getEpochInfo`, `randomx_setFastMode`) RPC namespaces.
 - **`epoch.go`**: Coordinates RandomX seed rotation every 2048 blocks.
   - Sets seed at block $E \times 2048 - 64$.
   - Precomputes the upcoming epoch cache asynchronously in a background goroutine during the 64-block lag window.
@@ -417,41 +417,24 @@ curl -X POST http://127.0.0.1:38845 \
   --data '{"jsonrpc":"2.0","method":"eth_getBalance","params":["0xe9aaE535B7971A9AC8C6af0e4B524D02260D3a03","latest"],"id":1}'
 ```
 
-#### Query Miner Cyberpunk Level (`rogue_getMinerLevel`):
+#### Query On-Chain Miner Reputation (`0x...0020` via `cast` / `eth_call`):
 ```bash
-curl -X POST http://127.0.0.1:38845 \
-  -H "Content-Type: application/json" \
-  --data '{"jsonrpc":"2.0","method":"rogue_getMinerLevel","params":["0xYourMinerAddress"],"id":1}'
+# Query numeric level (0..6)
+cast call 0x0000000000000000000000000000000000000020 "getMinerLevel(address)(uint32)" 0xYourMinerAddress \
+  --rpc-url http://127.0.0.1:38845
+
+# Query full localized profile (blocksMined, level, title, imageURI, currentXP, nextLevelXP, progressBps)
+cast call 0x0000000000000000000000000000000000000020 \
+  "getMinerStats(address,string)((uint256,uint32,string,string,uint256,uint256,uint16))" \
+  0xYourMinerAddress "en" \
+  --rpc-url http://127.0.0.1:38845
 ```
 
-#### Query Detailed Miner Progression Stats (`rogue_getMinerStats`):
+#### Query Consensus Telemetry (`randomx_getConsensusStatus`):
 ```bash
 curl -X POST http://127.0.0.1:38845 \
   -H "Content-Type: application/json" \
-  --data '{"jsonrpc":"2.0","method":"rogue_getMinerStats","params":["0xYourMinerAddress"],"id":1}'
-```
-Response:
-```json
-{
-  "jsonrpc": "2.0",
-  "id": 1,
-  "result": {
-    "address": "0xYourMinerAddress",
-    "blocksMined": 142,
-    "level": 3,
-    "title": "Hash Warden",
-    "currentXP": 142,
-    "nextLevelXP": 500,
-    "progressPercent": 28.4
-  }
-}
-```
-
-#### Query Consensus Telemetry (`rogue_getConsensusStatus`):
-```bash
-curl -X POST http://127.0.0.1:38845 \
-  -H "Content-Type: application/json" \
-  --data '{"jsonrpc":"2.0","method":"rogue_getConsensusStatus","params":[],"id":1}'
+  --data '{"jsonrpc":"2.0","method":"randomx_getConsensusStatus","params":[],"id":1}'
 ```
 
 ### Connecting with MetaMask
@@ -479,7 +462,7 @@ forge create --rpc-url http://127.0.0.1:38845 \
 
 ## 🎖️ Protocol-Level Gamification & Cyberpunk Miner Tiers
 
-Rogue Signal pioneers protocol-enforced miner progression without monetary distortion. The network tracks solo miner blocks natively in the EVM state trie at system address `0x0000000000000000000000000000000000000020` (`keccak256(miner.Bytes())`), active from Block 1 onwards with strict reorg safety ($\le 90$ blocks).
+Rogue Signal pioneers protocol-enforced miner progression without monetary distortion. The network tracks solo miner blocks natively in `StateDB` at the Block-0 EVM system contract `0x0000000000000000000000000000000000000020` (`keccak256(abi.encode(miner, 1))`), updating block counts from Block 1 onwards with strict reorg safety ($\le 90$ blocks). Both Smart Contracts (`STATICCALL`) and off-chain clients (`eth_call`) read directly from this contract as the single source of truth.
 
 Miners progress through 7 cyberpunk tiers strictly via cryptographic work:
 

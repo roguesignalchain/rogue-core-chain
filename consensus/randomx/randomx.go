@@ -828,7 +828,7 @@ func (rx *RandomX) Hashrate() float64 {
 	return localRate
 }
 
-// APIs returns consensus RPC APIs for eth (read-only/stubs), randomx (diagnostics/controls), and rogue (gamification/network) namespaces.
+// APIs returns consensus RPC APIs for eth (read-only/stubs) and randomx (diagnostics/controls) namespaces.
 func (rx *RandomX) APIs(chain consensus.ChainHeaderReader) []rpc.API {
 	return []rpc.API{
 		{
@@ -838,11 +838,6 @@ func (rx *RandomX) APIs(chain consensus.ChainHeaderReader) []rpc.API {
 		{
 			Namespace: "randomx",
 			Service:   &API{rx: rx, chain: chain},
-		},
-		{
-			Namespace: "rogue",
-			Service:   &RogueAPI{rx: rx, chain: chain},
-			Public:    true,
 		},
 	}
 }

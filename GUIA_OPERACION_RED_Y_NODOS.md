@@ -30,12 +30,12 @@ Antes de iniciar cualquier proceso, se verificó el estado del entorno:
 | **Reglas de Tiempo** | MTP-11 estricto | Límite de desvío futuro de 30 segundos |
 | **Finalidad Anti-51%** | `ECBP-1100 (MESS)` desde Bloque 0 | Gravedad polinómica ECBP-1100 (hasta $31\times$ TD, intervalo 15m) + desempate anti-selfish |
 | **Rotación de Semilla** | Cada 2048 bloques (~17.07h) | Semilla RandomX con lag de 64 bloques (~32m) |
-| **Hash Bloque Génesis** | `0xf30f172028b07950de58d2cb4d65593793c183fcd0f86c9c24c5d4a037b490b7` | Anclado en `RequireBlockHashes[0]` |
+| **Hash Bloque Génesis** | `0xde4c5e747fbb072d39db2ece5a245e46b6164045e166301dfdba78f86cfbe4dd` | Anclado en `RequireBlockHashes[0]` |
 | **Puerto P2P por defecto** | `38888` | Protocolo devp2p eth/68 |
 | **Puerto HTTP RPC** | `38845` | API JSON-RPC |
 | **Puerto WS RPC** | `38846` | WebSocket JSON-RPC |
 | **Minería Remota** | **Deshabilitada** | `eth_getWork` y `eth_submitWork` bloqueados contra rigs/pools |
-| **Gamificación On-Chain**| 7 Rangos Cyberpunk | Persistencia en StateDB (`0x00...0020`), consulta vía `rogue_getMinerLevel` / `rogue_getMinerStats` |
+| **Gamificación On-Chain**| 7 Rangos Cyberpunk | Contrato `RogueMinerReputation` en Bloque 0 (`0x00...0020`), consulta vía `eth_call` / `STATICCALL` |
 
 ---
 
@@ -310,12 +310,13 @@ Una vez abierta la aplicación gráfica:
 5. **Pestaña "Settings" (Configuración y Diagnóstico de Hardware)**:
    - Incluye también el botón **Verificar Recursos del Sistema** para ajustar el límite de caché RAM y parámetros del nodo sin riesgo.
 6. **Gamificación, Rangos Cyberpunk y Medallas de Minero**:
-   - Cada bloque canónico minado se acredita atómicamente en el contrato de sistema `0x0000000000000000000000000000000000000020`.
-   - El cliente de escritorio consulta el namespace `rogue_getMinerStats` y muestra tu medalla, nivel (0 a 6), barra de progreso de XP y avatar procedural *Voxel Bot*.
-   - También puedes consultar el estado desde la consola o terminal:
+   - Cada bloque canónico minado se acredita atómicamente en el contrato on-chain `RogueMinerReputation` (`0x0000000000000000000000000000000000000020`), desplegado nativamente en el Bloque 0.
+   - El cliente de escritorio consulta directamente el contrato vía `eth_call` (`viem`) y muestra tu medalla, nivel (`0` a `6`), título localizado, barra de progreso de XP y avatar procedural *Voxel Bot*.
+   - También puedes consultar el estado desde la consola o terminal usando `cast call`:
      ```bash
-     curl -X POST http://127.0.0.1:38845 -H "Content-Type: application/json" \
-       --data '{"jsonrpc":"2.0","method":"rogue_getMinerStats","params":["0xTuDireccion"],"id":1}'
+     cast call 0x0000000000000000000000000000000000000020 \
+       "getMinerStats(address,string)((uint256,uint32,string,string,uint256,uint256,uint16))" \
+       0xTuDireccion "es" --rpc-url http://127.0.0.1:38845
      ```
 
 ---
