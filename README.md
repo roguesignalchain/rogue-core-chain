@@ -128,8 +128,8 @@ $$\text{Reward} = \left\lfloor \frac{25 \times 10^{18}}{2^{\text{Era}}} \right\r
 
 ### 1. Consensus Package (`consensus/randomx`)
 - **`rx_cgo.go`**: Provides thread-safe Go bindings to `librandomx.a`.
-  - Implements `RxContext` containing an initialized `randomx_cache` (~256 MB) or `randomx_dataset` (~2.08 GB).
-  - Uses an elastic bounded `randomx_vm` pool (`chan *VM`) with atomic reference counting across worker goroutines, avoiding allocation overhead during verification or mining.
+  - Implements `RxContext` containing an initialized `randomx_cache` (~256 MB) or `randomx_dataset` (~2.08 GB; releases the temporary `LightCache` immediately after dataset build).
+  - Uses an elastic bounded `randomx_vm` pool (`chan *VM`) with atomic reference counting across worker goroutines and explicit kernel W^X fallback logging (`RANDOMX_FLAG_SECURE` / interpreter).
 - **`difficulty.go`**: Implements Zawy's **LWMA-1** algorithm.
   - Dynamically bootstraps for initial blocks ($H < 60$) using $k = \min(60, H)$.
   - Applies target clamping limiting difficulty shifts to $[67\%, 133\%]$ per block.
@@ -156,9 +156,9 @@ $$\text{Reward} = \left\lfloor \frac{25 \times 10^{18}}{2^{\text{Era}}} \right\r
   - Added `ConsensusEngineT_RandomX` to `ConsensusEngineT` enum.
   - Added `RandomXConfig` struct with `FastMode` and `Treasury` fields.
 - **`params/config_rogue.go`**:
-  - Added `RogueChainConfig` setting Chain ID `800055`, Cancun opcodes (`PUSH0`, `MCOPY`, `TSTORE/TLOAD`) from block 0, and default treasury `0xe9aaE535B7971A9AC8C6af0e4B524D02260D3a03`.
+  - Added `RogueChainConfig` setting Chain ID `800055`, hardened Berlin/London/Shanghai/Cancun EVM opcodes & gas rules (`EIP-2565`, `EIP-2929`, `EIP-3529`, `EIP-3541`, `EIP-3651`, `EIP-3855`, `EIP-3860`, `EIP-6049`, `EIP-5656`, `EIP-1153`) from block 0, and default treasury `0xe9aaE535B7971A9AC8C6af0e4B524D02260D3a03`.
 - **`params/genesis_rogue.go`**:
-  - Added `DefaultRogueGenesisBlock()` setting 60M gas limit, `0x10000` difficulty, and empty alloc (0% premine).
+  - Added `DefaultRogueGenesisBlock()` setting 50M gas limit, `0x10000` difficulty, and empty alloc (0% premine).
 - **`params/types/goethereum/goethereum.go`**:
   - Registered `"800055": "rogue-signal"` in network names.
   - Updated chain banner to display: `Consensus: RandomX rx/0 (proof-of-work, ASIC-resistant)`.

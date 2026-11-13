@@ -6,6 +6,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/params/types/coregeth"
 	"github.com/ethereum/go-ethereum/params/types/ctypes"
+	"github.com/ethereum/go-ethereum/params/vars"
 )
 
 var (
@@ -17,8 +18,9 @@ var (
 
 	// RogueChainConfig is the chain parameters to run a node on the Rogue Signal network.
 	RogueChainConfig = &coregeth.CoreGethChainConfig{
-		NetworkID: 800055,
-		ChainID:   big.NewInt(800055),
+		NetworkID:                 800055,
+		ChainID:                   big.NewInt(800055),
+		SupportedProtocolVersions: vars.DefaultProtocolVersions,
 		RandomX: &ctypes.RandomXConfig{
 			FastMode: false,
 			Treasury: RogueTreasuryAddress,
@@ -56,8 +58,19 @@ var (
 		EIP2028FBlock: big.NewInt(0),
 		EIP2200FBlock: big.NewInt(0),
 
-		// Shanghai (PUSH0 opcode)
+		// Berlin (ModExp, cold/warm state access gas repricing)
+		EIP2565FBlock: big.NewInt(0),
+		EIP2929FBlock: big.NewInt(0),
+
+		// London (refund reduction & 0xEF bytecode rejection; EIP-1559 intentionally omitted)
+		EIP3529FBlock: big.NewInt(0),
+		EIP3541FBlock: big.NewInt(0),
+
+		// Shanghai (Warm COINBASE, PUSH0, initcode metering/limit, SELFDESTRUCT deprecation)
+		EIP3651FBlock: big.NewInt(0),
 		EIP3855FBlock: big.NewInt(0),
+		EIP3860FBlock: big.NewInt(0),
+		EIP6049FBlock: big.NewInt(0),
 
 		// Cancun (MCOPY, TSTORE/TLOAD opcodes)
 		EIP5656FBlock: big.NewInt(0),

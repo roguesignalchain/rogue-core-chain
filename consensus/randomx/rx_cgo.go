@@ -14,6 +14,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"unsafe"
+
+	"github.com/ethereum/go-ethereum/log"
 )
 
 // RxFlags wraps randomx_flags
@@ -152,6 +154,10 @@ func NewRxContext(seed []byte, fastMode bool) (*RxContext, error) {
 			cache.Release()
 			return nil, fmt.Errorf("failed to initialize fast dataset: %w", err)
 		}
+		// FastDataset VMs use dataset directly (cache=nil); release the 256MB LightCache immediately.
+		cache.Release()
+		dataset.cache = nil
+		cache = nil
 	}
 
 	poolCap := runtime.NumCPU() + 2
@@ -181,13 +187,30 @@ func (ctx *RxContext) createVM() *VM {
 		return nil
 	}
 
-	cVM := allocVM(ctx.flags)
+	ctx.mu.RLock()
+	baseFlags := ctx.flags
+	ctx.mu.RUnlock()
+
+	cVM := allocVM(baseFlags)
 	// Fallback for W^X hardened kernels (macOS Hardened Runtime, strict SELinux/PaX):
 	// retry with RANDOMX_FLAG_SECURE, and finally fall back to interpreter mode if JIT is blocked.
-	if cVM == nil && (ctx.flags&C.RANDOMX_FLAG_JIT) != 0 {
-		cVM = allocVM(ctx.flags | C.RANDOMX_FLAG_SECURE)
-		if cVM == nil {
-			cVM = allocVM(ctx.flags &^ C.RANDOMX_FLAG_JIT)
+	if cVM == nil && (baseFlags&C.RANDOMX_FLAG_JIT) != 0 {
+		secureFlags := baseFlags | C.RANDOMX_FLAG_SECURE
+		cVM = allocVM(secureFlags)
+		if cVM != nil {
+			log.Warn("RandomX JIT allocation failed; falling back to RANDOMX_FLAG_SECURE (W^X safe)")
+			ctx.mu.Lock()
+			ctx.flags = secureFlags
+			ctx.mu.Unlock()
+		} else {
+			interpFlags := baseFlags &^ C.RANDOMX_FLAG_JIT
+			cVM = allocVM(interpFlags)
+			if cVM != nil {
+				log.Warn("RandomX JIT and SECURE modes blocked by kernel; falling back to slow interpreter mode")
+				ctx.mu.Lock()
+				ctx.flags = interpFlags
+				ctx.mu.Unlock()
+			}
 		}
 	}
 	if cVM == nil {

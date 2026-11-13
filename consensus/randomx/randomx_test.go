@@ -908,3 +908,36 @@ func TestVerifyHeaderDeterministicClock(t *testing.T) {
 		t.Fatalf("expected ErrOlderBlockTime for timestamp < MTP-11, got: %v", err)
 	}
 }
+
+func TestSealNonBlockingOnPreclosedStop(t *testing.T) {
+	rx := New(Config{Threads: 1})
+	defer rx.Close()
+
+	// Nil chain without seed block: if Seal() ran GetContextForHeader synchronously,
+	// it would return an error instead of returning nil immediately on pre-closed stop.
+	hdr := &types.Header{
+		Number:     big.NewInt(1),
+		Difficulty: new(big.Int).Set(MinDifficulty),
+		GasLimit:   50000000,
+		UncleHash:  types.EmptyUncleHash,
+	}
+	block := types.NewBlockWithHeader(hdr)
+
+	stop := make(chan struct{})
+	close(stop)
+	results := make(chan *types.Block, 1)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- rx.Seal(nil, block, results, stop)
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("expected Seal with pre-closed stop to return nil asynchronously, got: %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Seal blocked on pre-closed stop")
+	}
+}

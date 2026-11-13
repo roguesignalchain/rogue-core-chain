@@ -19,11 +19,14 @@ const (
 	// CacheRetentionBlocks is the number of blocks to retain the previous epoch cache to handle chain reorgs.
 	CacheRetentionBlocks = uint64(128)
 
-	// MaxCachedContexts is the maximum number of RandomX contexts retained in memory simultaneously.
+	// MaxCachedContexts is the maximum number of RandomX contexts retained in memory simultaneously in Light Mode.
 	MaxCachedContexts = 3
 
-	// MaxResolvedSeedCache is the capacity of the O(1) header-to-seed LRU cache (~4KB RAM).
-	MaxResolvedSeedCache = 128
+	// MaxCachedContextsFast is the maximum number of RandomX contexts retained in Fast Mode (~2.08GB each) to prevent OOM.
+	MaxCachedContextsFast = 2
+
+	// MaxResolvedSeedCache is the capacity of the O(1) header-to-seed LRU cache (~80KB RAM).
+	MaxResolvedSeedCache = 2048
 )
 
 type inflightKey struct {
@@ -334,8 +337,13 @@ func (em *EpochManager) getContextBySeed(epoch uint64, seed common.Hash) (*RxCon
 			}
 		}
 
-		// Bound total cached contexts to MaxCachedContexts, ensuring we never evict the newly created seed
-		for len(em.contexts) > MaxCachedContexts {
+		// Bound total cached contexts (3 in Light Mode, 2 in Fast Mode to prevent >4.2GB RAM spikes),
+		// ensuring we never evict the newly created seed.
+		maxContexts := MaxCachedContexts
+		if targetFast {
+			maxContexts = MaxCachedContextsFast
+		}
+		for len(em.contexts) > maxContexts {
 			var oldestSeed common.Hash
 			var lowestEpoch uint64 = ^uint64(0)
 			for s, ep := range em.contextEpochs {
@@ -427,9 +435,10 @@ func (em *EpochManager) VMPoolStats() (totalVMs, activeVMs int64, allocatedMB ui
 		t, a := ctx.VMPoolStats()
 		totalVMs += t
 		activeVMs += a
-		allocatedMB += 256 // LightCache
 		if ctx.fastMode {
-			allocatedMB += 2080 // FastDataset
+			allocatedMB += 2080 // FastDataset (LightCache already released)
+		} else {
+			allocatedMB += 256 // LightCache
 		}
 	}
 	if totalVMs > 0 {

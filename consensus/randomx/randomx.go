@@ -471,6 +471,14 @@ func (rx *RandomX) Prepare(chain consensus.ChainHeaderReader, header *types.Head
 	if mtp := CalculateMTP11(chain, parent); header.Time <= mtp {
 		header.Time = mtp + 1
 	}
+	if now := rx.currentUnixTime(); header.Time > now+MaxFutureDrift {
+		log.Warn("RandomX Prepare: MTP-11 forced block timestamp beyond MaxFutureDrift; block may be rejected until clock catches up",
+			"number", header.Number,
+			"headerTime", header.Time,
+			"now", now,
+			"maxFutureDrift", MaxFutureDrift,
+		)
+	}
 
 	diff, err := CalculateDifficulty(chain, header.Time, parent)
 	if err != nil {
@@ -618,14 +626,6 @@ func (rx *RandomX) Seal(chain consensus.ChainHeaderReader, block *types.Block, r
 		return nil
 	}
 
-	ctx, err := rx.epochs.GetContextForHeader(header, chain)
-	if err != nil {
-		return fmt.Errorf("failed to get RandomX context for mining block %d: %w", number, err)
-	}
-
-	// Pre-warm pooled VMs in parallel using GOMAXPROCS before spawning mining threads
-	ctx.PrewarmVMs(threads)
-
 	targetBE := TargetToBytes32(DifficultyToTarget(header.Difficulty))
 	sealHash := rx.SealHash(header)
 
@@ -651,10 +651,36 @@ func (rx *RandomX) Seal(chain consensus.ChainHeaderReader, block *types.Block, r
 		abortOnce  sync.Once
 	)
 
-	// Mining must run asynchronously to prevent blocking the worker's taskLoop,
-	// allowing task cancellation upon receiving new tasks or chain heads.
+	// Mining (including epoch context/dataset initialization and VM prewarming) must run asynchronously
+	// to prevent blocking the worker's taskLoop, allowing immediate cancellation on stop or new heads.
 	go func() {
+		select {
+		case <-stop:
+			return
+		default:
+		}
+
+		ctx, err := rx.epochs.GetContextForHeader(header, chain)
+		if err != nil {
+			log.Error("RandomX Seal: failed to get RandomX context for mining", "number", number, "err", err)
+			return
+		}
 		defer ctx.DecRef()
+
+		select {
+		case <-stop:
+			return
+		default:
+		}
+
+		// Pre-warm pooled VMs in parallel using GOMAXPROCS before spawning mining threads
+		ctx.PrewarmVMs(threads)
+
+		select {
+		case <-stop:
+			return
+		default:
+		}
 
 		var wg sync.WaitGroup
 		for threadID := 0; threadID < threads; threadID++ {

@@ -444,3 +444,30 @@ func TestRogueMESSFinality(t *testing.T) {
 		t.Error("Expected shallow reorg with higher TD to be allowed")
 	}
 }
+
+func TestRogueChainConfigHardeningEIPs(t *testing.T) {
+	cfg := params.RogueChainConfig
+	if cfg == nil {
+		t.Fatal("RogueChainConfig is nil")
+	}
+	checks := []struct {
+		name string
+		val  *big.Int
+	}{
+		{"EIP2565FBlock", cfg.EIP2565FBlock},
+		{"EIP2929FBlock", cfg.EIP2929FBlock},
+		{"EIP3529FBlock", cfg.EIP3529FBlock},
+		{"EIP3541FBlock", cfg.EIP3541FBlock},
+		{"EIP3651FBlock", cfg.EIP3651FBlock},
+		{"EIP3855FBlock", cfg.EIP3855FBlock},
+		{"EIP3860FBlock", cfg.EIP3860FBlock},
+		{"EIP6049FBlock", cfg.EIP6049FBlock},
+		{"EIP5656FBlock", cfg.EIP5656FBlock},
+		{"EIP1153FBlock", cfg.EIP1153FBlock},
+	}
+	for _, c := range checks {
+		if c.val == nil || c.val.Sign() != 0 {
+			t.Errorf("expected %s to be active at block 0, got %v", c.name, c.val)
+		}
+	}
+}

@@ -377,3 +377,29 @@ func TestEpochBoundaryForkAndReorgSeedIsolation(t *testing.T) {
 		t.Fatal("Competing forks with different epoch seeds must not share RxContext")
 	}
 }
+
+func TestResolvedSeedCacheCapacity(t *testing.T) {
+	if MaxResolvedSeedCache < 2048 {
+		t.Fatalf("expected MaxResolvedSeedCache >= 2048 for batch sync, got %d", MaxResolvedSeedCache)
+	}
+	if MaxCachedContextsFast != 2 {
+		t.Fatalf("expected MaxCachedContextsFast == 2 to prevent OOM in Fast Mode, got %d", MaxCachedContextsFast)
+	}
+
+	em := NewEpochManager(false)
+	defer em.Close()
+
+	// Insert 300 entries (> old limit of 128) and verify none are prematurely evicted.
+	for i := 0; i < 300; i++ {
+		h := common.BigToHash(big.NewInt(int64(i + 1)))
+		s := common.BigToHash(big.NewInt(int64(i + 10000)))
+		em.cacheResolvedSeed(h, s)
+	}
+
+	em.mu.RLock()
+	gotLen := len(em.resolvedSeeds)
+	em.mu.RUnlock()
+	if gotLen != 300 {
+		t.Fatalf("expected 300 cached resolved seeds, got %d", gotLen)
+	}
+}
