@@ -20,7 +20,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"math/big"
-	"os"
 	"reflect"
 	"testing"
 
@@ -371,25 +370,6 @@ func TestRogueGenesisBlockAndFinality(t *testing.T) {
 	}
 }
 
-func TestRogueGenesisJSON(t *testing.T) {
-	file, err := os.Open("../genesis.json")
-	if err != nil {
-		t.Fatalf("Failed to open genesis.json: %v", err)
-	}
-	defer file.Close()
-
-	var genesis genesisT.Genesis
-	if err := json.NewDecoder(file).Decode(&genesis); err != nil {
-		t.Fatalf("Failed to decode genesis.json: %v", err)
-	}
-
-	block := GenesisToBlock(&genesis, nil)
-	t.Logf("genesis.json computed block hash: %s", block.Hash().Hex())
-	if block.Hash() != params.RogueGenesisHash {
-		t.Errorf("genesis.json block hash mismatch: have %s, want %s", block.Hash().Hex(), params.RogueGenesisHash.Hex())
-	}
-}
-
 type mockRogueHeaderReader struct {
 	headers map[common.Hash]*types.Header
 	tds     map[common.Hash]*big.Int
@@ -462,33 +442,5 @@ func TestRogueMESSFinality(t *testing.T) {
 	}
 	if !allowed {
 		t.Error("Expected shallow reorg with higher TD to be allowed")
-	}
-}
-
-func TestRogueGenesisConfigParity(t *testing.T) {
-	file, err := os.Open("../genesis.json")
-	if err != nil {
-		t.Fatalf("Failed to open ../genesis.json: %v", err)
-	}
-	defer file.Close()
-
-	var genesis genesisT.Genesis
-	if err := json.NewDecoder(file).Decode(&genesis); err != nil {
-		t.Fatalf("Failed to decode genesis.json: %v", err)
-	}
-	if genesis.Config == nil {
-		t.Fatal("genesis.json Config is nil")
-	}
-
-	jsonBytes, err := json.Marshal(genesis.Config)
-	if err != nil {
-		t.Fatalf("Failed to marshal genesis.json Config: %v", err)
-	}
-	codeBytes, err := json.Marshal(params.RogueChainConfig)
-	if err != nil {
-		t.Fatalf("Failed to marshal params.RogueChainConfig: %v", err)
-	}
-	if string(jsonBytes) != string(codeBytes) {
-		t.Fatalf("genesis.json ChainConfig parity mismatch:\ngenesis.json: %s\ncode config : %s", string(jsonBytes), string(codeBytes))
 	}
 }

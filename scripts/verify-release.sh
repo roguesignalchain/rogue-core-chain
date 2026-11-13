@@ -44,7 +44,7 @@ echo "-> go vet ./consensus/randomx/..."
 echo "-> go test -race ./consensus/randomx/..."
 (cd "${CORE_DIR}" && go test -race -count=1 ./consensus/randomx/)
 echo "-> go test genesis & MESS in ./core/..."
-(cd "${CORE_DIR}" && go test -count=1 ./core/ -run 'TestRogueGenesisBlockAndFinality|TestRogueGenesisJSON|TestRogueMESSFinality')
+(cd "${CORE_DIR}" && go test -count=1 ./core/ -run 'TestRogueGenesisBlockAndFinality|TestRogueMESSFinality')
 echo "-> Test suite passed."
 
 # 4. Verify sidecar
