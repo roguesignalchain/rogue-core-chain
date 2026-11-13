@@ -2,11 +2,13 @@ package randomx
 
 import (
 	"errors"
+	"math"
 	"math/big"
 	"testing"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -583,5 +585,141 @@ func TestVerifySealMixDigestPrecheck(t *testing.T) {
 	}
 	if err := rx.VerifySeal(nil, h); err == nil {
 		t.Fatal("Expected VerifySeal to reject MixDigest exceeding target before CGo hashing")
+	}
+}
+
+func TestMalformedAndNilHeaders(t *testing.T) {
+	rx := New(Config{FastMode: false, Threads: 1})
+	defer rx.Close()
+
+	chain := NewFakeChainReader()
+	now := uint64(time.Now().Unix())
+	genesis := &types.Header{
+		Number:     big.NewInt(0),
+		Time:       now - 60,
+		Difficulty: big.NewInt(0x10000),
+		GasLimit:   60000000,
+	}
+	chain.AddHeader(genesis)
+
+	hugeNum := new(big.Int).Lsh(big.NewInt(1), 65)
+
+	malformedCases := []struct {
+		name   string
+		header *types.Header
+	}{
+		{"nil header", nil},
+		{"nil Number", &types.Header{ParentHash: genesis.Hash(), Time: now}},
+		{"non-uint64 Number", &types.Header{ParentHash: genesis.Hash(), Number: hugeNum, Time: now}},
+	}
+
+	for _, tc := range malformedCases {
+		if err := rx.VerifyHeader(chain, tc.header, false); !errors.Is(err, consensus.ErrInvalidNumber) {
+			t.Errorf("%s: VerifyHeader expected ErrInvalidNumber, got %v", tc.name, err)
+		}
+		if err := rx.VerifySeal(chain, tc.header); !errors.Is(err, consensus.ErrInvalidNumber) {
+			t.Errorf("%s: VerifySeal expected ErrInvalidNumber, got %v", tc.name, err)
+		}
+		if _, err := rx.epochs.ResolveSeedForHeader(tc.header, chain); !errors.Is(err, consensus.ErrInvalidNumber) {
+			t.Errorf("%s: ResolveSeedForHeader expected ErrInvalidNumber, got %v", tc.name, err)
+		}
+		if _, err := rx.epochs.GetContextForHeader(tc.header, chain); !errors.Is(err, consensus.ErrInvalidNumber) {
+			t.Errorf("%s: GetContextForHeader expected ErrInvalidNumber, got %v", tc.name, err)
+		}
+		if _, err := CalculateDifficulty(chain, now, tc.header); !errors.Is(err, consensus.ErrUnknownAncestor) {
+			t.Errorf("%s: CalculateDifficulty expected ErrUnknownAncestor, got %v", tc.name, err)
+		}
+	}
+
+	// Nil, zero, and negative Difficulty checks
+	diffCases := []*big.Int{nil, big.NewInt(0), big.NewInt(-100)}
+	for _, d := range diffCases {
+		h := &types.Header{
+			ParentHash: genesis.Hash(),
+			Number:     big.NewInt(1),
+			Time:       now,
+			GasLimit:   60000000,
+			UncleHash:  types.EmptyUncleHash,
+			Difficulty: d,
+		}
+		if err := rx.VerifyHeader(chain, h, false); err == nil {
+			t.Errorf("VerifyHeader should reject difficulty=%v", d)
+		}
+		if err := rx.VerifySeal(chain, h); !errors.Is(err, ErrInvalidPoW) {
+			t.Errorf("VerifySeal expected ErrInvalidPoW for difficulty=%v, got %v", d, err)
+		}
+	}
+
+	// Batch VerifyHeaders with nil and malformed headers must not panic
+	batch := []*types.Header{
+		nil,
+		{Number: nil},
+		{Number: hugeNum},
+	}
+	abort, results := rx.VerifyHeaders(chain, batch, []bool{false, false, false})
+	defer close(abort)
+	for i := range batch {
+		if err := <-results; !errors.Is(err, consensus.ErrInvalidNumber) {
+			t.Errorf("VerifyHeaders[%d] expected ErrInvalidNumber, got %v", i, err)
+		}
+	}
+}
+
+func TestVerifyHeaderTimeOverflowAndDrift(t *testing.T) {
+	chain := NewFakeChainReader()
+	parent := &types.Header{Number: big.NewInt(0), Time: 1000}
+	chain.AddHeader(parent)
+
+	// Exact MaxFutureDrift is allowed
+	if err := VerifyHeaderTime(chain, &types.Header{Number: big.NewInt(1), Time: 2000 + MaxFutureDrift}, parent, 2000); err != nil {
+		t.Fatalf("Expected exact MaxFutureDrift to pass, got %v", err)
+	}
+
+	// Exceeding MaxFutureDrift by 1 second must fail
+	if err := VerifyHeaderTime(chain, &types.Header{Number: big.NewInt(1), Time: 2000 + MaxFutureDrift + 1}, parent, 2000); !errors.Is(err, consensus.ErrFutureBlock) {
+		t.Fatalf("Expected ErrFutureBlock, got %v", err)
+	}
+
+	// Overflow-safe check when now is near math.MaxUint64
+	nearMax := uint64(math.MaxUint64) - 5
+	if err := VerifyHeaderTime(chain, &types.Header{Number: big.NewInt(1), Time: nearMax + 5}, parent, nearMax); err != nil {
+		t.Fatalf("Expected overflow-safe drift check near MaxUint64 to pass, got %v", err)
+	}
+}
+
+func TestHashMeetsTargetZeroAlloc(t *testing.T) {
+	target := DifficultyToTarget(big.NewInt(0x10000))
+	targetBE := TargetToBytes32(target)
+
+	var zeroHash [32]byte
+	if !HashMeetsTarget(zeroHash, targetBE) {
+		t.Fatal("Zero hash must always meet any positive target")
+	}
+
+	// Exact equality (little-endian hash matching big-endian targetBE)
+	var eqHash [32]byte
+	for i := 0; i < 32; i++ {
+		eqHash[31-i] = targetBE[i]
+	}
+	if !HashMeetsTarget(eqHash, targetBE) {
+		t.Fatal("Hash equal to target must meet target")
+	}
+
+	// One byte higher in MSB must fail
+	overHash := eqHash
+	overHash[31] = 0xff
+	if HashMeetsTarget(overHash, targetBE) {
+		t.Fatal("Hash above target must not meet target")
+	}
+
+	// Nil/zero target rejects even zero hash? Wait: TargetToBytes32(0) is 0x00..00, so zeroHash == 0x00..00
+	// Confirm >256-bit target saturates to 0xff..ff
+	maxTargetBE := TargetToBytes32(new(big.Int).Lsh(big.NewInt(1), 256))
+	var maxHash [32]byte
+	for i := range maxHash {
+		maxHash[i] = 0xff
+	}
+	if !HashMeetsTarget(maxHash, maxTargetBE) {
+		t.Fatal("Saturated 256-bit target must accept max hash")
 	}
 }
