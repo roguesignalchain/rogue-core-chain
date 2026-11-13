@@ -119,3 +119,27 @@ func TestConcurrentHashingAndCloseRace(t *testing.T) {
 	}
 }
 
+func TestHugePagesTryWithFallback(t *testing.T) {
+	flags := GetRecommendedFlags(false)
+	if (flags & 1) == 0 { // RANDOMX_FLAG_LARGE_PAGES == 1
+		t.Fatalf("expected GetRecommendedFlags to request RANDOMX_FLAG_LARGE_PAGES, got %v", flags)
+	}
+
+	ctx, err := NewRxContext([]byte("test key 000"), false)
+	if err != nil {
+		t.Fatalf("NewRxContext should succeed via HugePages or automatic fallback, got: %v", err)
+	}
+	defer ctx.Close()
+
+	// Verify deterministic vector hash regardless of whether HugePages were granted by the OS.
+	hash, err := ctx.CalculateHash([]byte("This is a test"))
+	if err != nil {
+		t.Fatalf("CalculateHash failed: %v", err)
+	}
+	const expectedHex = "639183aae1bf4c9a35884cb46b09cad9175f04efd7684e7262a0ac1c2f0b4e3f"
+	if hex.EncodeToString(hash[:]) != expectedHex {
+		t.Fatalf("hash mismatch: got %s, want %s", hex.EncodeToString(hash[:]), expectedHex)
+	}
+	_ = ctx.LargePages()
+}
+

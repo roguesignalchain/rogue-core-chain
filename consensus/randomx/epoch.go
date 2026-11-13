@@ -447,6 +447,18 @@ func (em *EpochManager) VMPoolStats() (totalVMs, activeVMs int64, allocatedMB ui
 	return totalVMs, activeVMs, allocatedMB
 }
 
+// LargePages returns true if any active cached RandomX context is using OS HugePages.
+func (em *EpochManager) LargePages() bool {
+	em.mu.RLock()
+	defer em.mu.RUnlock()
+	for _, ctx := range em.contexts {
+		if ctx != nil && ctx.LargePages() {
+			return true
+		}
+	}
+	return false
+}
+
 // Close frees all active RandomX contexts.
 func (em *EpochManager) Close() {
 	em.mu.Lock()

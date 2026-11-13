@@ -31,25 +31,28 @@ type VM struct {
 
 // LightCache wraps the ~256MB cache used in Light Mode.
 type LightCache struct {
-	raw  *C.randomx_cache
-	seed []byte
+	raw        *C.randomx_cache
+	seed       []byte
+	largePages bool
 }
 
 // FastDataset wraps the ~2.08GB dataset used in Fast Mode.
 type FastDataset struct {
-	raw   *C.randomx_dataset
-	cache *LightCache
-	seed  []byte
+	raw        *C.randomx_dataset
+	cache      *LightCache
+	seed       []byte
+	largePages bool
 }
 
 // RxContext manages cache/dataset for a specific epoch seed and provides an elastic bounded VM pool
 // with atomic reference counting for lock-free, thread-safe hashing and lazy CGo memory release.
 type RxContext struct {
-	seed     []byte
-	fastMode bool
-	cache    *LightCache
-	dataset  *FastDataset
-	flags    C.randomx_flags
+	seed       []byte
+	fastMode   bool
+	largePages bool
+	cache      *LightCache
+	dataset    *FastDataset
+	flags      C.randomx_flags
 
 	vmPool      chan *VM
 	totalVMs    atomic.Int64
@@ -60,18 +63,24 @@ type RxContext struct {
 	mu          sync.RWMutex
 }
 
-// GetRecommendedFlags returns machine-optimized flags (JIT, HardAES, etc.)
+// GetRecommendedFlags returns machine-optimized flags (JIT, HardAES, LargePages, etc.)
 func GetRecommendedFlags(fastMode bool) C.randomx_flags {
-	flags := C.randomx_get_flags()
+	flags := C.randomx_get_flags() | C.RANDOMX_FLAG_LARGE_PAGES
 	if fastMode {
 		flags |= C.RANDOMX_FLAG_FULL_MEM
 	}
 	return flags
 }
 
-// NewLightCache allocates and initializes a 256MB RandomX cache for the given seed.
+// NewLightCache allocates and initializes a 256MB RandomX cache for the given seed,
+// attempting HugePages if requested and falling back to standard pages if unavailable.
 func NewLightCache(seed []byte, flags C.randomx_flags) (*LightCache, error) {
+	usedLargePages := (flags & C.RANDOMX_FLAG_LARGE_PAGES) != 0
 	cCache := C.randomx_alloc_cache(flags)
+	if cCache == nil && usedLargePages {
+		usedLargePages = false
+		cCache = C.randomx_alloc_cache(flags &^ C.RANDOMX_FLAG_LARGE_PAGES)
+	}
 	if cCache == nil {
 		return nil, errors.New("failed to allocate RandomX cache (out of memory)")
 	}
@@ -80,7 +89,11 @@ func NewLightCache(seed []byte, flags C.randomx_flags) (*LightCache, error) {
 	defer C.free(cSeed)
 
 	C.randomx_init_cache(cCache, cSeed, C.size_t(len(seed)))
-	return &LightCache{raw: cCache, seed: append([]byte(nil), seed...)}, nil
+	return &LightCache{
+		raw:        cCache,
+		seed:       append([]byte(nil), seed...),
+		largePages: usedLargePages,
+	}, nil
 }
 
 // Release releases cache memory.
@@ -91,9 +104,15 @@ func (c *LightCache) Release() {
 	}
 }
 
-// NewFastDataset allocates and initializes the ~2.08GB dataset using an initialized cache.
+// NewFastDataset allocates and initializes the ~2.08GB dataset using an initialized cache,
+// attempting HugePages if requested and falling back to standard pages if unavailable.
 func NewFastDataset(cache *LightCache, flags C.randomx_flags) (*FastDataset, error) {
+	usedLargePages := (flags & C.RANDOMX_FLAG_LARGE_PAGES) != 0
 	cDataset := C.randomx_alloc_dataset(flags)
+	if cDataset == nil && usedLargePages {
+		usedLargePages = false
+		cDataset = C.randomx_alloc_dataset(flags &^ C.RANDOMX_FLAG_LARGE_PAGES)
+	}
 	if cDataset == nil {
 		return nil, errors.New("failed to allocate RandomX dataset (need ~2.1GB RAM)")
 	}
@@ -122,7 +141,7 @@ func NewFastDataset(cache *LightCache, flags C.randomx_flags) (*FastDataset, err
 	}
 	wg.Wait()
 
-	return &FastDataset{raw: cDataset, cache: cache, seed: cache.seed}, nil
+	return &FastDataset{raw: cDataset, cache: cache, seed: cache.seed, largePages: usedLargePages}, nil
 }
 
 // Release releases dataset memory.
@@ -142,11 +161,18 @@ func (d *FastDataset) Release() {
 func NewRxContext(seed []byte, fastMode bool) (*RxContext, error) {
 	flags := GetRecommendedFlags(fastMode)
 
-	cache, err := NewLightCache(seed, flags)
+	// In Fast Mode, keep HugePages reserved for the 2.08GB FastDataset rather than the temporary 256MB LightCache.
+	cacheFlags := flags
+	if fastMode {
+		cacheFlags &^= C.RANDOMX_FLAG_LARGE_PAGES
+	}
+
+	cache, err := NewLightCache(seed, cacheFlags)
 	if err != nil {
 		return nil, err
 	}
 
+	usedLargePages := cache.largePages
 	var dataset *FastDataset
 	if fastMode {
 		dataset, err = NewFastDataset(cache, flags)
@@ -154,10 +180,21 @@ func NewRxContext(seed []byte, fastMode bool) (*RxContext, error) {
 			cache.Release()
 			return nil, fmt.Errorf("failed to initialize fast dataset: %w", err)
 		}
+		usedLargePages = dataset.largePages
 		// FastDataset VMs use dataset directly (cache=nil); release the 256MB LightCache immediately.
 		cache.Release()
 		dataset.cache = nil
 		cache = nil
+	}
+
+	mode := "light"
+	if fastMode {
+		mode = "fast"
+	}
+	if usedLargePages {
+		log.Info("RandomX context initialized with HugePages enabled", "mode", mode)
+	} else {
+		log.Info("RandomX context initialized with standard pages (HugePages unavailable)", "mode", mode)
 	}
 
 	poolCap := runtime.NumCPU() + 2
@@ -166,15 +203,24 @@ func NewRxContext(seed []byte, fastMode bool) (*RxContext, error) {
 	}
 
 	ctx := &RxContext{
-		seed:     append([]byte(nil), seed...),
-		fastMode: fastMode,
-		cache:    cache,
-		dataset:  dataset,
-		flags:    flags,
-		vmPool:   make(chan *VM, poolCap),
+		seed:       append([]byte(nil), seed...),
+		fastMode:   fastMode,
+		largePages: usedLargePages,
+		cache:      cache,
+		dataset:    dataset,
+		flags:      flags,
+		vmPool:     make(chan *VM, poolCap),
 	}
 
 	return ctx, nil
+}
+
+// LargePages returns true if this context's primary memory (dataset in Fast Mode, cache in Light Mode)
+// was allocated using OS HugePages.
+func (ctx *RxContext) LargePages() bool {
+	ctx.mu.RLock()
+	defer ctx.mu.RUnlock()
+	return ctx.largePages
 }
 
 func (ctx *RxContext) createVM() *VM {
@@ -192,6 +238,17 @@ func (ctx *RxContext) createVM() *VM {
 	ctx.mu.RUnlock()
 
 	cVM := allocVM(baseFlags)
+	if cVM == nil && (baseFlags&C.RANDOMX_FLAG_LARGE_PAGES) != 0 {
+		noLPFlags := baseFlags &^ C.RANDOMX_FLAG_LARGE_PAGES
+		cVM = allocVM(noLPFlags)
+		if cVM != nil {
+			log.Info("RandomX VM scratchpad HugePages unavailable; falling back to standard pages")
+			ctx.mu.Lock()
+			ctx.flags = noLPFlags
+			ctx.mu.Unlock()
+		}
+		baseFlags = noLPFlags
+	}
 	// Fallback for W^X hardened kernels (macOS Hardened Runtime, strict SELinux/PaX):
 	// retry with RANDOMX_FLAG_SECURE, and finally fall back to interpreter mode if JIT is blocked.
 	if cVM == nil && (baseFlags&C.RANDOMX_FLAG_JIT) != 0 {

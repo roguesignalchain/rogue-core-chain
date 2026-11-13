@@ -100,6 +100,7 @@ type VMPoolInfo struct {
 	ActiveVMs         int64  `json:"activeVMs"`
 	Mode              string `json:"mode"`
 	AllocatedMemoryMB uint64 `json:"allocatedMemoryMB"`
+	LargePages        bool   `json:"largePages"`
 }
 
 // ConsensusStatus represents the real-time consensus parameters, monetary schedule, and active security defenses.
@@ -213,6 +214,7 @@ func (api *API) GetConsensusStatus() ConsensusStatus {
 			ActiveVMs:         activeVMs,
 			Mode:              poolMode,
 			AllocatedMemoryMB: allocatedMB,
+			LargePages:        api.rx.epochs.LargePages(),
 		},
 		EpochInfo:           epochInfo,
 	}

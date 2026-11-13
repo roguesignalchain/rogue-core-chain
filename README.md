@@ -128,8 +128,8 @@ $$\text{Reward} = \left\lfloor \frac{25 \times 10^{18}}{2^{\text{Era}}} \right\r
 
 ### 1. Consensus Package (`consensus/randomx`)
 - **`rx_cgo.go`**: Provides thread-safe Go bindings to `librandomx.a`.
-  - Implements `RxContext` containing an initialized `randomx_cache` (~256 MB) or `randomx_dataset` (~2.08 GB; releases the temporary `LightCache` immediately after dataset build).
-  - Uses an elastic bounded `randomx_vm` pool (`chan *VM`) with atomic reference counting across worker goroutines and explicit kernel W^X fallback logging (`RANDOMX_FLAG_SECURE` / interpreter).
+  - Implements `RxContext` containing an initialized `randomx_cache` (~256 MB) or `randomx_dataset` (~2.08 GB; releases the temporary `LightCache` immediately after dataset build) with automatic zero-config `RANDOMX_FLAG_LARGE_PAGES` try-with-fallback.
+  - Uses an elastic bounded `randomx_vm` pool (`chan *VM`) with atomic reference counting across worker goroutines, HugePages scratchpad fallback, and explicit kernel W^X fallback logging (`RANDOMX_FLAG_SECURE` / interpreter).
 - **`difficulty.go`**: Implements Zawy's **LWMA-1** algorithm.
   - Dynamically bootstraps for initial blocks ($H < 60$) using $k = \min(60, H)$.
   - Applies target clamping limiting difficulty shifts to $[67\%, 133\%]$ per block.
