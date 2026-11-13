@@ -22,8 +22,9 @@ type RxFlags uint32
 // VM represents an allocated RandomX virtual machine.
 // Note: A single VM must not be used concurrently from multiple goroutines.
 type VM struct {
-	raw      *C.randomx_vm
-	fastMode bool
+	raw       *C.randomx_vm
+	fastMode  bool
+	destroyed atomic.Bool
 }
 
 // LightCache wraps the ~256MB cache used in Light Mode.
@@ -197,8 +198,11 @@ func (ctx *RxContext) createVM() *VM {
 	return vm
 }
 
-// Destroy cleans up the VM instance.
+// Destroy cleans up the VM instance. Safe to call multiple times.
 func (v *VM) Destroy() {
+	if v == nil || !v.destroyed.CompareAndSwap(false, true) {
+		return
+	}
 	if v.raw != nil {
 		runtime.SetFinalizer(v, nil)
 		C.randomx_destroy_vm(v.raw)
@@ -370,22 +374,20 @@ func (ctx *RxContext) VMPoolStats() (total, active int64) {
 // The caller must hold an active context reference via IncRef() for the duration of the call.
 func (ctx *RxContext) CalculateHashWithVM(vm *VM, input []byte) ([32]byte, error) {
 	var output [32]byte
-	if vm == nil || vm.raw == nil {
+	if vm == nil || vm.raw == nil || vm.destroyed.Load() {
 		return output, errors.New("invalid RandomX VM")
 	}
 	if len(input) == 0 {
 		return output, errors.New("empty input")
 	}
 
-	cInput := C.CBytes(input)
-	defer C.free(cInput)
-
 	C.randomx_calculate_hash(
 		vm.raw,
-		cInput,
+		unsafe.Pointer(&input[0]),
 		C.size_t(len(input)),
 		unsafe.Pointer(&output[0]),
 	)
+	runtime.KeepAlive(input)
 
 	return output, nil
 }
@@ -415,6 +417,7 @@ func (ctx *RxContext) tryRelease() {
 		if ctx.dataset != nil {
 			ctx.dataset.Release()
 			ctx.dataset = nil
+			ctx.cache = nil
 		} else if ctx.cache != nil {
 			ctx.cache.Release()
 			ctx.cache = nil

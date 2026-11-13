@@ -32,6 +32,9 @@ func MinerStorageKey(miner common.Address) common.Hash {
 
 // IncrementMinerBlockCount records an additional mined block in the StateDB under GamificationSystemAddress.
 func IncrementMinerBlockCount(state *state.StateDB, miner common.Address) uint64 {
+	if state == nil {
+		return 0
+	}
 	// Ensure GamificationSystemAddress is not purged as empty by EIP-158 / Spurious Dragon state clearing.
 	// An account with Nonce > 0 is non-empty and will safely persist in the StateDB across block commits.
 	if state.GetNonce(GamificationSystemAddress) == 0 {

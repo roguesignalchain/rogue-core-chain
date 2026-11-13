@@ -161,8 +161,8 @@ func (em *EpochManager) cacheResolvedSeed(headerHash, seed common.Hash) {
 // its ancestor chain back to SeedBlockNumber(epoch). Uses an O(1) bounded cache (~4KB RAM)
 // to avoid repeated parent walks on consecutive or side-fork blocks.
 func (em *EpochManager) ResolveSeedForHeader(header *types.Header, chain consensus.ChainHeaderReader) (common.Hash, error) {
-	if header == nil {
-		return common.Hash{}, fmt.Errorf("nil header")
+	if header == nil || header.Number == nil || !header.Number.IsUint64() {
+		return common.Hash{}, consensus.ErrInvalidNumber
 	}
 	blockNum := header.Number.Uint64()
 	epoch := EpochNumber(blockNum)
@@ -247,6 +247,9 @@ func (em *EpochManager) GetContext(blockNum uint64, chain consensus.ChainHeaderR
 // GetContextForHeader returns the execution context for a specific header, resolving its seed
 // along the header's own ancestor branch so side-fork blocks across epoch boundaries verify accurately.
 func (em *EpochManager) GetContextForHeader(header *types.Header, chain consensus.ChainHeaderReader) (*RxContext, error) {
+	if header == nil || header.Number == nil || !header.Number.IsUint64() {
+		return nil, consensus.ErrInvalidNumber
+	}
 	epoch := EpochNumber(header.Number.Uint64())
 	seed, err := em.ResolveSeedForHeader(header, chain)
 	if err != nil {

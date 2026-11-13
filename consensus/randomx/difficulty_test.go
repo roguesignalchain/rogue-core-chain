@@ -5,8 +5,10 @@ import (
 	"math/big"
 	"testing"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/params/types/ctypes"
 )
 
 func TestDifficultyTargetConversion(t *testing.T) {
@@ -253,4 +255,46 @@ func TestLWMAMissingAncestorDeterministicError(t *testing.T) {
 	if !errors.Is(err, consensus.ErrUnknownAncestor) {
 		t.Fatalf("Expected consensus.ErrUnknownAncestor, got %v", err)
 	}
+}
+
+// FakeChainReader is a mock helper for unit tests that provides headers by hash/number.
+type FakeChainReader struct {
+	headers map[common.Hash]*types.Header
+}
+
+func NewFakeChainReader() *FakeChainReader {
+	return &FakeChainReader{headers: make(map[common.Hash]*types.Header)}
+}
+
+func (f *FakeChainReader) AddHeader(h *types.Header) {
+	f.headers[h.Hash()] = h
+}
+
+func (f *FakeChainReader) Config() ctypes.ChainConfigurator {
+	return nil
+}
+
+func (f *FakeChainReader) CurrentHeader() *types.Header {
+	return nil
+}
+
+func (f *FakeChainReader) GetHeader(hash common.Hash, number uint64) *types.Header {
+	return f.headers[hash]
+}
+
+func (f *FakeChainReader) GetHeaderByNumber(number uint64) *types.Header {
+	for _, h := range f.headers {
+		if h.Number.Uint64() == number {
+			return h
+		}
+	}
+	return nil
+}
+
+func (f *FakeChainReader) GetHeaderByHash(hash common.Hash) *types.Header {
+	return f.headers[hash]
+}
+
+func (f *FakeChainReader) GetTd(hash common.Hash, number uint64) *big.Int {
+	return big.NewInt(1)
 }

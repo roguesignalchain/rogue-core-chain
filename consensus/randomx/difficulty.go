@@ -3,12 +3,11 @@ package randomx
 import (
 	"errors"
 	"fmt"
+	"math"
 	"math/big"
 
-	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/params/types/ctypes"
 )
 
 const (
@@ -74,11 +73,43 @@ func TargetToDifficulty(target *big.Int) *big.Int {
 // HashToBig converts a 32-byte hash (little-endian byte array as produced by RandomX)
 // into a big.Int for target comparison.
 func HashToBig(hash [32]byte) *big.Int {
-	reversed := make([]byte, 32)
+	var reversed [32]byte
 	for i := 0; i < 32; i++ {
 		reversed[i] = hash[31-i]
 	}
-	return new(big.Int).SetBytes(reversed)
+	return new(big.Int).SetBytes(reversed[:])
+}
+
+// TargetToBytes32 converts a 256-bit target *big.Int into a big-endian 32-byte array.
+func TargetToBytes32(target *big.Int) [32]byte {
+	var out [32]byte
+	if target == nil || target.Sign() <= 0 {
+		return out
+	}
+	if target.BitLen() > 256 {
+		for i := range out {
+			out[i] = 0xff
+		}
+		return out
+	}
+	target.FillBytes(out[:])
+	return out
+}
+
+// HashMeetsTarget checks whether a 32-byte little-endian RandomX hash is <= targetBE (big-endian)
+// with zero heap allocations.
+func HashMeetsTarget(hash [32]byte, targetBE [32]byte) bool {
+	for i := 0; i < 32; i++ {
+		b := hash[31-i]
+		t := targetBE[i]
+		if b < t {
+			return true
+		}
+		if b > t {
+			return false
+		}
+	}
+	return true
 }
 
 // CalculateDifficulty implements the LWMA-1 (Linear Weighted Moving Average)
@@ -90,7 +121,7 @@ func HashToBig(hash [32]byte) *big.Int {
 //	where WeightedTimes = sum_{i=1}^{k} (i * solvetime_i)
 //	k = min(window, blockNumber)
 func CalculateDifficulty(chain consensus.ChainHeaderReader, time uint64, parent *types.Header) (*big.Int, error) {
-	if parent == nil {
+	if parent == nil || parent.Number == nil || !parent.Number.IsUint64() {
 		return nil, consensus.ErrUnknownAncestor
 	}
 
@@ -126,14 +157,15 @@ func CalculateDifficulty(chain consensus.ChainHeaderReader, time uint64, parent 
 	// to prevent out-of-order timestamp oscillation attacks under MTP-11.
 	var (
 		sumTarget     = new(big.Int)
-		weightedTimes = int64(0)
-		prevTime      = int64(headers[0].Time)
+		weightedTimes = uint64(0)
+		prevTime      = headers[0].Time
+		maxSolveTime  = 6 * targetTime
 	)
 
 	for i := uint64(1); i <= k; i++ {
 		hCurr := headers[i]
 
-		currTime := int64(hCurr.Time)
+		currTime := hCurr.Time
 		if currTime <= prevTime {
 			currTime = prevTime + 1
 		}
@@ -141,11 +173,11 @@ func CalculateDifficulty(chain consensus.ChainHeaderReader, time uint64, parent 
 		prevTime = currTime
 
 		// Cap extreme solvetimes to prevent malicious manipulation (max 6 * targetTime)
-		if solvetime > int64(6*targetTime) {
-			solvetime = int64(6 * targetTime)
+		if solvetime > maxSolveTime {
+			solvetime = maxSolveTime
 		}
 
-		weightedTimes += int64(i) * solvetime
+		weightedTimes += i * solvetime
 
 		target := DifficultyToTarget(hCurr.Difficulty)
 		sumTarget.Add(sumTarget, target)
@@ -161,8 +193,11 @@ func CalculateDifficulty(chain consensus.ChainHeaderReader, time uint64, parent 
 	}
 
 	// nextTarget = (avgTarget * weightedTimes) / denominator
-	nextTarget := new(big.Int).Mul(avgTarget, big.NewInt(weightedTimes))
-	nextTarget.Div(nextTarget, big.NewInt(int64(denominator)))
+	if weightedTimes > math.MaxInt64 {
+		weightedTimes = math.MaxInt64
+	}
+	nextTarget := new(big.Int).Mul(avgTarget, new(big.Int).SetUint64(weightedTimes))
+	nextTarget.Div(nextTarget, new(big.Int).SetUint64(denominator))
 
 	if nextTarget.Sign() <= 0 {
 		nextTarget = big.NewInt(1)
@@ -238,51 +273,9 @@ func VerifyHeaderTime(chain consensus.ChainHeaderReader, header *types.Header, p
 		return ErrOlderBlockTime
 	}
 
-	if header.Time > now+MaxFutureDrift {
+	if header.Time > now && header.Time-now > MaxFutureDrift {
 		return consensus.ErrFutureBlock
 	}
 
 	return nil
-}
-
-// FakeChainReader is a mock helper for unit tests that provides headers by hash/number.
-type FakeChainReader struct {
-	headers map[common.Hash]*types.Header
-}
-
-func NewFakeChainReader() *FakeChainReader {
-	return &FakeChainReader{headers: make(map[common.Hash]*types.Header)}
-}
-
-func (f *FakeChainReader) AddHeader(h *types.Header) {
-	f.headers[h.Hash()] = h
-}
-
-func (f *FakeChainReader) Config() ctypes.ChainConfigurator {
-	return nil
-}
-
-func (f *FakeChainReader) CurrentHeader() *types.Header {
-	return nil
-}
-
-func (f *FakeChainReader) GetHeader(hash common.Hash, number uint64) *types.Header {
-	return f.headers[hash]
-}
-
-func (f *FakeChainReader) GetHeaderByNumber(number uint64) *types.Header {
-	for _, h := range f.headers {
-		if h.Number.Uint64() == number {
-			return h
-		}
-	}
-	return nil
-}
-
-func (f *FakeChainReader) GetHeaderByHash(hash common.Hash) *types.Header {
-	return f.headers[hash]
-}
-
-func (f *FakeChainReader) GetTd(hash common.Hash, number uint64) *big.Int {
-	return big.NewInt(1)
 }

@@ -2,11 +2,11 @@ package randomx
 
 import (
 	"bytes"
+	"crypto/rand"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"math/big"
-	"math/rand"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -205,6 +205,9 @@ func (rx *RandomX) Author(header *types.Header) (common.Address, error) {
 
 // VerifyHeader checks whether a header conforms to the Rogue Signal consensus rules.
 func (rx *RandomX) VerifyHeader(chain consensus.ChainHeaderReader, header *types.Header, seal bool) error {
+	if header == nil || header.Number == nil || !header.Number.IsUint64() {
+		return consensus.ErrInvalidNumber
+	}
 	// Genesis block is always valid
 	number := header.Number.Uint64()
 	if number == 0 {
@@ -224,6 +227,9 @@ func (rx *RandomX) VerifyHeader(chain consensus.ChainHeaderReader, header *types
 // MTP-11 + 30s drift, LWMA-1 difficulty, GasLimit bounds, and disallowed optional header fields)
 // before Phase 2 invokes the CPU-intensive RandomX CGo seal check.
 func (rx *RandomX) verifyHeader(chain consensus.ChainHeaderReader, header, parent *types.Header, seal bool) error {
+	if header == nil || parent == nil || header.Number == nil || parent.Number == nil || !header.Number.IsUint64() {
+		return consensus.ErrInvalidNumber
+	}
 	// 1. Verify that the block number is parent's +1
 	if diff := new(big.Int).Sub(header.Number, parent.Number); diff.Cmp(big.NewInt(1)) != 0 {
 		return consensus.ErrInvalidNumber
@@ -246,6 +252,9 @@ func (rx *RandomX) verifyHeader(chain consensus.ChainHeaderReader, header, paren
 	}
 
 	// 5. Verify difficulty adjustment via LWMA-1
+	if header.Difficulty == nil || header.Difficulty.Sign() <= 0 {
+		return fmt.Errorf("invalid difficulty: %v", header.Difficulty)
+	}
 	expectedDifficulty, err := CalculateDifficulty(chain, header.Time, parent)
 	if err != nil {
 		return err
@@ -254,7 +263,7 @@ func (rx *RandomX) verifyHeader(chain consensus.ChainHeaderReader, header, paren
 		return fmt.Errorf("invalid difficulty: have %v, want %v", header.Difficulty, expectedDifficulty)
 	}
 
-	// 5. Verify gas limit bounds and ±1/1024 adjustment delta relative to parent
+	// 6. Verify gas limit bounds and ±1/1024 adjustment delta relative to parent
 	if header.GasLimit > vars.MaxGasLimit {
 		return fmt.Errorf("invalid gasLimit: have %v, max %v", header.GasLimit, vars.MaxGasLimit)
 	}
@@ -265,7 +274,7 @@ func (rx *RandomX) verifyHeader(chain consensus.ChainHeaderReader, header, paren
 		return err
 	}
 
-	// 6. Reject optional header fields from inactive forks to prevent block-hash malleability
+	// 7. Reject optional header fields from inactive forks to prevent block-hash malleability
 	if header.BaseFee != nil {
 		return fmt.Errorf("invalid baseFee: have %v, expected nil", header.BaseFee)
 	}
@@ -282,7 +291,7 @@ func (rx *RandomX) verifyHeader(chain consensus.ChainHeaderReader, header, paren
 		return fmt.Errorf("invalid parentBeaconRoot: have %x, expected nil", *header.ParentBeaconRoot)
 	}
 
-	// 7. Verify seal if requested (Phase 2)
+	// 8. Verify seal if requested (Phase 2)
 	if seal {
 		if err := rx.VerifySeal(chain, header); err != nil {
 			return err
@@ -306,6 +315,9 @@ func (rx *RandomX) VerifyHeaders(chain consensus.ChainHeaderReader, headers []*t
 	byHash := make(map[common.Hash]*types.Header, len(headers))
 	byNumber := make(map[uint64]*types.Header, len(headers))
 	for _, h := range headers {
+		if h == nil || h.Number == nil || !h.Number.IsUint64() {
+			continue
+		}
 		byHash[h.Hash()] = h
 		byNumber[h.Number.Uint64()] = h
 	}
@@ -340,6 +352,12 @@ func (rx *RandomX) VerifyHeaders(chain consensus.ChainHeaderReader, headers []*t
 					close(done[i])
 					return
 				default:
+				}
+
+				if header == nil || header.Number == nil || !header.Number.IsUint64() {
+					errs[i] = consensus.ErrInvalidNumber
+					close(done[i])
+					continue
 				}
 
 				number := header.Number.Uint64()
@@ -526,17 +544,22 @@ func MiningInput(sealHash common.Hash, nonce uint64) []byte {
 
 // VerifySeal checks if the header contains a valid RandomX proof of work.
 func (rx *RandomX) VerifySeal(chain consensus.ChainHeaderReader, header *types.Header) error {
+	if header == nil || header.Number == nil || !header.Number.IsUint64() {
+		return consensus.ErrInvalidNumber
+	}
 	number := header.Number.Uint64()
 	if number == 0 {
 		return nil // Genesis
+	}
+	if header.Difficulty == nil || header.Difficulty.Sign() <= 0 {
+		return ErrInvalidPoW
 	}
 
 	// Fast pre-check: verify MixDigest meets the difficulty target before spending
 	// heavy CPU cycles computing the CGo RandomX hash. If MixDigest > Target, it is impossible
 	// for this seal to be valid regardless of the hash calculation.
-	target := DifficultyToTarget(header.Difficulty)
-	mixNum := HashToBig(header.MixDigest)
-	if mixNum.Cmp(target) > 0 {
+	targetBE := TargetToBytes32(DifficultyToTarget(header.Difficulty))
+	if !HashMeetsTarget(header.MixDigest, targetBE) {
 		return ErrInvalidPoW
 	}
 
@@ -554,15 +577,9 @@ func (rx *RandomX) VerifySeal(chain consensus.ChainHeaderReader, header *types.H
 		return fmt.Errorf("RandomX hash calculation failed: %w", err)
 	}
 
-	// Verify MixDigest matches the RandomX hash output
+	// Verify MixDigest matches the RandomX hash output (target check already passed above)
 	if !bytes.Equal(header.MixDigest.Bytes(), rxHash[:]) {
 		return ErrInvalidMixDigest
-	}
-
-	// Verify PoW difficulty target: HashToBig(rxHash) <= Target
-	hashNum := HashToBig(rxHash)
-	if hashNum.Cmp(target) > 0 {
-		return ErrInvalidPoW
 	}
 
 	return nil
@@ -590,8 +607,12 @@ func (rx *RandomX) Seal(chain consensus.ChainHeaderReader, block *types.Block, r
 	// Pre-warm pooled VMs in parallel using GOMAXPROCS before spawning mining threads
 	ctx.PrewarmVMs(threads)
 
-	target := DifficultyToTarget(header.Difficulty)
+	targetBE := TargetToBytes32(DifficultyToTarget(header.Difficulty))
 	sealHash := rx.SealHash(header)
+
+	var baseNonceBuf [8]byte
+	_, _ = rand.Read(baseNonceBuf[:])
+	baseNonce := binary.LittleEndian.Uint64(baseNonceBuf[:])
 
 	var (
 		foundNonce uint64
@@ -619,8 +640,12 @@ func (rx *RandomX) Seal(chain consensus.ChainHeaderReader, block *types.Block, r
 				}
 				defer ctx.ReleaseVM(vm)
 
-				// Each thread starts searching from an independent randomized nonce offset
-				nonce := rand.Uint64() + uint64(tid)*0x100000000
+				// Pre-allocate the 76-byte RandomX mining blob once per worker goroutine
+				var input [MiningBlobSize]byte
+				copy(input[:32], sealHash.Bytes())
+
+				// Each thread starts searching from an independent cryptographically seeded nonce offset
+				nonce := baseNonce + uint64(tid)*0x100000000
 				var attempts int64
 
 				for {
@@ -640,16 +665,15 @@ func (rx *RandomX) Seal(chain consensus.ChainHeaderReader, block *types.Block, r
 						attempts = 0
 					}
 
-					input := MiningInput(sealHash, nonce)
-					rxHash, err := ctx.CalculateHashWithVM(vm, input)
+					binary.LittleEndian.PutUint64(input[39:], nonce)
+					rxHash, err := ctx.CalculateHashWithVM(vm, input[:])
 					if err != nil {
 						rx.markAttempts(attempts)
 						log.Debug("RandomX seal worker stopped due to context error", "tid", tid, "number", number, "err", err)
 						return
 					}
 
-					hashNum := HashToBig(rxHash)
-					if hashNum.Cmp(target) <= 0 {
+					if HashMeetsTarget(rxHash, targetBE) {
 						rx.markAttempts(attempts)
 						abortOnce.Do(func() {
 							foundNonce = nonce
