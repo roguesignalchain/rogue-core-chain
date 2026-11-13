@@ -25,8 +25,8 @@ const (
 	// MaxCachedContextsFast is the maximum number of RandomX contexts retained in Fast Mode (~2.08GB each) to prevent OOM.
 	MaxCachedContextsFast = 2
 
-	// MaxResolvedSeedCache is the capacity of the O(1) header-to-seed LRU cache (~80KB RAM).
-	MaxResolvedSeedCache = 2048
+	// MaxResolvedSeedCache is the capacity of the O(1) header-to-seed LRU cache (~160KB RAM, covers 2 full epochs).
+	MaxResolvedSeedCache = 4096
 )
 
 type inflightKey struct {
