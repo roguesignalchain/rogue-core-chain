@@ -294,3 +294,86 @@ func TestResolveSeedForHeaderMissingAncestor(t *testing.T) {
 		t.Fatalf("Expected ErrUnknownAncestor for orphan branch missing seed ancestor, got %v", err)
 	}
 }
+
+func TestEpochBoundaryForkAndReorgSeedIsolation(t *testing.T) {
+	chain := NewFakeChainReader()
+
+	// Build shared ancestor chain up to block 1983 (just before Epoch 1 seed block 1984 = 2048 - 64)
+	genesis := &types.Header{Number: big.NewInt(0), Time: 1000}
+	chain.AddHeader(genesis)
+	prev := genesis
+	for i := uint64(1); i < EpochLength-SeedLag; i++ {
+		h := &types.Header{
+			ParentHash: prev.Hash(),
+			Number:     big.NewInt(int64(i)),
+			Time:       prev.Time + 30,
+		}
+		chain.AddHeader(h)
+		prev = h
+	}
+
+	// Fork A and Fork B diverge at SeedBlockNumber(1) = 1984 and cross Epoch 1 boundary (2048 -> 2050)
+	buildBranch := func(tag string, start *types.Header) (*types.Header, *types.Header) {
+		var seedHdr, tipHdr *types.Header
+		curr := start
+		for i := EpochLength - SeedLag; i <= EpochLength+2; i++ {
+			h := &types.Header{
+				ParentHash: curr.Hash(),
+				Number:     big.NewInt(int64(i)),
+				Time:       curr.Time + 30,
+				Extra:      []byte(tag),
+			}
+			chain.AddHeader(h)
+			if i == EpochLength-SeedLag {
+				seedHdr = h
+			}
+			tipHdr = h
+			curr = h
+		}
+		return seedHdr, tipHdr
+	}
+
+	seedA, tipA := buildBranch("fork-A", prev)
+	seedB, tipB := buildBranch("fork-B", prev)
+
+	if seedA.Hash() == seedB.Hash() {
+		t.Fatal("Fork A and Fork B seed hashes must differ")
+	}
+
+	em := NewEpochManager(false)
+	defer em.Close()
+
+	// Resolve seeds for both competing tips in Epoch 1
+	resolvedA, err := em.ResolveSeedForHeader(tipA, chain)
+	if err != nil {
+		t.Fatalf("ResolveSeedForHeader(tipA) failed: %v", err)
+	}
+	if resolvedA != seedA.Hash() {
+		t.Fatalf("Fork A seed mismatch: have %s, want %s", resolvedA.Hex(), seedA.Hash().Hex())
+	}
+
+	resolvedB, err := em.ResolveSeedForHeader(tipB, chain)
+	if err != nil {
+		t.Fatalf("ResolveSeedForHeader(tipB) failed: %v", err)
+	}
+	if resolvedB != seedB.Hash() {
+		t.Fatalf("Fork B seed mismatch: have %s, want %s", resolvedB.Hex(), seedB.Hash().Hex())
+	}
+
+	// Verify both branches obtain distinct RxContext instances with matching seeds
+	ctxA, err := em.GetContextForHeader(tipA, chain)
+	if err != nil {
+		t.Fatalf("GetContextForHeader(tipA) failed: %v", err)
+	}
+	defer ctxA.DecRef()
+
+	ctxB, err := em.GetContextForHeader(tipB, chain)
+	if err != nil {
+		t.Fatalf("GetContextForHeader(tipB) failed: %v", err)
+	}
+	defer ctxB.DecRef()
+
+	if ctxA == ctxB {
+		t.Fatal("Competing forks with different epoch seeds must not share RxContext")
+	}
+}

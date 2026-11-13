@@ -613,3 +613,47 @@ func (s *testService) Greet() string {
 func (s *testService) Sleep() {
 	time.Sleep(1500 * time.Millisecond)
 }
+
+func TestHTTPServerIPConnLimit(t *testing.T) {
+	srv := newHTTPServer(log.Root(), rpc.DefaultHTTPTimeouts)
+
+	const clientIP = "192.0.2.10"
+	// Acquire up to maxHTTPConnsPerIP slots
+	for i := 0; i < maxHTTPConnsPerIP; i++ {
+		ip, ok := srv.acquireIPSlot(clientIP + ":12345")
+		if !ok || ip != clientIP {
+			t.Fatalf("expected slot %d to succeed for %s, got ok=%v ip=%q", i, clientIP, ok, ip)
+		}
+	}
+
+	// Next concurrent request from the same IP must be rejected with 429
+	if _, ok := srv.acquireIPSlot(clientIP + ":54321"); ok {
+		t.Fatal("expected request exceeding maxHTTPConnsPerIP to be rejected")
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/", nil)
+	req.RemoteAddr = clientIP + ":54321"
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected HTTP 429 Too Many Requests, got %d", rec.Code)
+	}
+
+	// Different IP must still be allowed
+	if ip, ok := srv.acquireIPSlot("192.0.2.11:9999"); !ok || ip != "192.0.2.11" {
+		t.Fatalf("expected different IP to be allowed, got ok=%v ip=%q", ok, ip)
+	} else {
+		srv.releaseIPSlot(ip)
+	}
+
+	// Release all slots and confirm map is completely cleaned up (zero memory leak)
+	for i := 0; i < maxHTTPConnsPerIP; i++ {
+		srv.releaseIPSlot(clientIP)
+	}
+	srv.ipConnsMu.Lock()
+	remaining := len(srv.ipConns)
+	srv.ipConnsMu.Unlock()
+	if remaining != 0 {
+		t.Fatalf("expected ipConns map to be empty after release, got %d entries", remaining)
+	}
+}

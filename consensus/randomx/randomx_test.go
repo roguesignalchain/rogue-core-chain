@@ -723,3 +723,51 @@ func TestHashMeetsTargetZeroAlloc(t *testing.T) {
 		t.Fatal("Saturated 256-bit target must accept max hash")
 	}
 }
+
+func FuzzVerifyHeader(f *testing.F) {
+	f.Add(uint64(1), uint64(1030), uint64(0x10000), uint64(60000000), uint64(0), []byte("rogue"), byte(0xff))
+	f.Add(uint64(0), uint64(0), uint64(0), uint64(0), uint64(0), []byte{}, byte(0x00))
+	f.Add(uint64(2), uint64(math.MaxUint64), uint64(1), uint64(50000000), uint64(50000001), make([]byte, 100), byte(0x7f))
+
+	rx := New(Config{FastMode: false, Threads: 1})
+	defer rx.Close()
+
+	chain := NewFakeChainReader()
+	now := uint64(time.Now().Unix())
+	genesis := &types.Header{
+		Number:     big.NewInt(0),
+		Time:       now - 60,
+		Difficulty: big.NewInt(0x10000),
+		GasLimit:   60000000,
+	}
+	chain.AddHeader(genesis)
+
+	f.Fuzz(func(t *testing.T, num, ts, diff, gasLimit, gasUsed uint64, extra []byte, mixByte byte) {
+		var mix common.Hash
+		for i := range mix {
+			mix[i] = mixByte
+		}
+		// Keep MSB non-zero when Difficulty >= MinDifficulty so VerifySeal exercises
+		// header validation & fast target pre-check without allocating 256MB CGo caches per fuzz worker.
+		if diff >= 0x10000 {
+			mix[31] = 0xff
+		}
+		h := &types.Header{
+			ParentHash: genesis.Hash(),
+			Number:     new(big.Int).SetUint64(num),
+			Time:       ts,
+			Difficulty: new(big.Int).SetUint64(diff),
+			GasLimit:   gasLimit,
+			GasUsed:    gasUsed,
+			Extra:      extra,
+			UncleHash:  types.EmptyUncleHash,
+			MixDigest:  mix,
+		}
+		// Must never panic on arbitrary fuzzed headers
+		_ = rx.VerifyHeader(chain, h, false)
+		if diff == 0 || diff >= 0x10000 || num == 0 {
+			_ = rx.VerifySeal(chain, h)
+		}
+		_, _ = CalculateDifficulty(chain, ts, h)
+	})
+}
