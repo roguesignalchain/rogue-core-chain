@@ -347,8 +347,10 @@ func (em *EpochManager) getContextBySeed(epoch uint64, seed common.Hash, targetF
 
 		// Bound total cached contexts (3 in Light Mode, 2 in Fast Mode to prevent >4.2GB RAM spikes),
 		// ensuring we never evict the newly created seed.
+		// If Fast Mode is active globally on the manager, enforce MaxCachedContextsFast even when
+		// caching a temporary Light context for historical verification so total RAM stays bounded.
 		maxContexts := MaxCachedContexts
-		if targetFast {
+		if targetFast || em.fastMode {
 			maxContexts = MaxCachedContextsFast
 		}
 		for len(em.contexts) > maxContexts {

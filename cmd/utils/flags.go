@@ -2047,7 +2047,9 @@ func SetEthConfig(ctx *cli.Context, stack *node.Node, cfg *ethconfig.Config) {
 		cfg.SyncMode = downloader.FullSync // dev sync target forces full sync
 	} else if ctx.IsSet(SyncModeFlag.Name) {
 		cfg.SyncMode = *flags.GlobalTextMarshaler(ctx, SyncModeFlag.Name).(*downloader.SyncMode)
-	} else if ctx.Bool(RogueFlag.Name) {
+	} else if ctx.Bool(RogueFlag.Name) ||
+		ctx.Uint64(NetworkIdFlag.Name) == params.RogueChainConfig.NetworkID ||
+		(cfg.Genesis != nil && cfg.Genesis.Config != nil && cfg.Genesis.Config.GetConsensusEngineType() == ctypes.ConsensusEngineT_RandomX) {
 		cfg.SyncMode = downloader.FullSync
 	}
 
@@ -2622,7 +2624,7 @@ func MakeChain(ctx *cli.Context, stack *node.Node, readonly bool) (*core.BlockCh
 		randomxConfig = &randomx.Config{
 			FastMode: ctx.Bool(RandomXFastFlag.Name),
 			Threads:  ctx.Int(MinerThreadsFlag.Name),
-			Treasury: params.RogueTreasuryAddress,
+			Treasury: params.ResolveRandomXTreasury(gspec.Config),
 		}
 	}
 

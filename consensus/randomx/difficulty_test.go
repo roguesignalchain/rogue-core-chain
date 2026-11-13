@@ -309,6 +309,7 @@ func TestCalculateDifficultyAndMTP11Parity(t *testing.T) {
 	chain.AddHeader(genesis)
 
 	parent := genesis
+	targetCache := make(map[common.Hash]*big.Int, 80)
 	// Verify parity across both short (< 11 blocks) and full (> 60 blocks) windows.
 	for i := int64(1); i <= 75; i++ {
 		delta := uint64(30)
@@ -329,6 +330,10 @@ func TestCalculateDifficultyAndMTP11Parity(t *testing.T) {
 		if err != nil {
 			t.Fatalf("block %d: CalculateDifficultyAndMTP11 failed: %v", i, err)
 		}
+		cachedDiff, cachedMTP, err := calculateDifficultyAndMTP11(chain, h, targetCache)
+		if err != nil {
+			t.Fatalf("block %d: cached calculateDifficultyAndMTP11 failed: %v", i, err)
+		}
 		wantDiff, err := CalculateDifficulty(chain, h.Time, h)
 		if err != nil {
 			t.Fatalf("block %d: CalculateDifficulty failed: %v", i, err)
@@ -338,8 +343,11 @@ func TestCalculateDifficultyAndMTP11Parity(t *testing.T) {
 		if gotDiff.Cmp(wantDiff) != 0 {
 			t.Fatalf("block %d: difficulty mismatch: got %v, want %v", i, gotDiff, wantDiff)
 		}
-		if gotMTP != wantMTP {
-			t.Fatalf("block %d: MTP-11 mismatch: got %d, want %d", i, gotMTP, wantMTP)
+		if cachedDiff.Cmp(wantDiff) != 0 {
+			t.Fatalf("block %d: cached difficulty mismatch: got %v, want %v", i, cachedDiff, wantDiff)
+		}
+		if gotMTP != wantMTP || cachedMTP != wantMTP {
+			t.Fatalf("block %d: MTP-11 mismatch: got %d/%d, want %d", i, gotMTP, cachedMTP, wantMTP)
 		}
 		parent = h
 	}

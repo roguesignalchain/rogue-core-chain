@@ -176,7 +176,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 			randomxConfig = &randomx.Config{
 				FastMode: config.RandomXFast,
 				Threads:  -1,
-				Treasury: params.RogueTreasuryAddress,
+				Treasury: params.ResolveRandomXTreasury(chainConfig),
 			}
 		}
 	}

@@ -6,6 +6,7 @@ import (
 	"math"
 	"math/big"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/core/types"
 )
@@ -128,6 +129,10 @@ func CalculateDifficulty(chain consensus.ChainHeaderReader, time uint64, parent 
 // CalculateDifficultyAndMTP11 computes both the next LWMA-1 difficulty and the Past Median Time
 // (MTP-11) of parent in a single ancestor traversal to avoid duplicate header lookups during sync.
 func CalculateDifficultyAndMTP11(chain consensus.ChainHeaderReader, parent *types.Header) (*big.Int, uint64, error) {
+	return calculateDifficultyAndMTP11(chain, parent, nil)
+}
+
+func calculateDifficultyAndMTP11(chain consensus.ChainHeaderReader, parent *types.Header, targetByHash map[common.Hash]*big.Int) (*big.Int, uint64, error) {
 	if parent == nil || parent.Number == nil || !parent.Number.IsUint64() {
 		return nil, 0, consensus.ErrUnknownAncestor
 	}
@@ -189,7 +194,18 @@ func CalculateDifficultyAndMTP11(chain consensus.ChainHeaderReader, parent *type
 
 		weightedTimes += i * solvetime
 
-		target := DifficultyToTarget(hCurr.Difficulty)
+		var target *big.Int
+		if targetByHash != nil {
+			hHash := hCurr.Hash()
+			if cached, ok := targetByHash[hHash]; ok {
+				target = cached
+			} else {
+				target = DifficultyToTarget(hCurr.Difficulty)
+				targetByHash[hHash] = target
+			}
+		} else {
+			target = DifficultyToTarget(hCurr.Difficulty)
+		}
 		sumTarget.Add(sumTarget, target)
 	}
 

@@ -249,6 +249,10 @@ func (rx *RandomX) VerifyHeader(chain consensus.ChainHeaderReader, header *types
 // MTP-11 + 30s drift, LWMA-1 difficulty, GasLimit bounds, and disallowed optional header fields)
 // before Phase 2 invokes the CPU-intensive RandomX CGo seal check.
 func (rx *RandomX) verifyHeader(chain consensus.ChainHeaderReader, header, parent *types.Header, seal bool) error {
+	return rx.verifyHeaderWithCache(chain, header, parent, seal, nil)
+}
+
+func (rx *RandomX) verifyHeaderWithCache(chain consensus.ChainHeaderReader, header, parent *types.Header, seal bool, targetByHash map[common.Hash]*big.Int) error {
 	if header == nil || parent == nil || header.Number == nil || parent.Number == nil || !header.Number.IsUint64() {
 		return consensus.ErrInvalidNumber
 	}
@@ -272,7 +276,7 @@ func (rx *RandomX) verifyHeader(chain consensus.ChainHeaderReader, header, paren
 	if header.Difficulty == nil || header.Difficulty.Sign() <= 0 {
 		return fmt.Errorf("invalid difficulty: %v", header.Difficulty)
 	}
-	expectedDifficulty, mtp, err := CalculateDifficultyAndMTP11(chain, parent)
+	expectedDifficulty, mtp, err := calculateDifficultyAndMTP11(chain, parent, targetByHash)
 	if err != nil {
 		return err
 	}
@@ -370,6 +374,7 @@ func (rx *RandomX) VerifyHeaders(chain consensus.ChainHeaderReader, headers []*t
 
 		// Producer: run Phase 1 fail-fast checks and dispatch Phase 2 seal checks to worker pool
 		go func() {
+			targetByHash := make(map[common.Hash]*big.Int, n+DefaultLWMAWindow)
 			for i, header := range headers {
 				select {
 				case <-abort:
@@ -404,7 +409,7 @@ func (rx *RandomX) VerifyHeaders(chain consensus.ChainHeaderReader, headers []*t
 				}
 
 				// Phase 1: Fast lightweight validation (microseconds)
-				if err := rx.verifyHeader(batchReader, header, parent, false); err != nil {
+				if err := rx.verifyHeaderWithCache(batchReader, header, parent, false, targetByHash); err != nil {
 					errs[i] = err
 					close(done[i])
 					continue
@@ -630,6 +635,14 @@ func (rx *RandomX) VerifySeal(chain consensus.ChainHeaderReader, header *types.H
 	// Verify MixDigest matches the RandomX hash output (target check already passed above)
 	if !bytes.Equal(header.MixDigest.Bytes(), rxHash[:]) {
 		return ErrInvalidMixDigest
+	}
+
+	// Precompute next epoch cache/dataset in the background for non-mining validators/RPC nodes
+	// when validating a tip block inside the SeedLag window.
+	if !useLightForPastEpoch && chain != nil {
+		if head := chain.CurrentHeader(); head != nil && head.Number != nil && head.Number.IsUint64() && number >= head.Number.Uint64() {
+			rx.epochs.PrecomputeNextEpoch(number, chain)
+		}
 	}
 
 	return nil

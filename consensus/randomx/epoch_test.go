@@ -457,4 +457,33 @@ func TestGetLightContextForHeader(t *testing.T) {
 	if ctxReuse != ctxLight {
 		t.Fatal("expected GetLightContextForHeader to reuse already-cached Light context")
 	}
+
+	// Verify FastMode global cap: even when inserting a Light context for historical verification,
+	// total cached contexts must remain bounded by MaxCachedContextsFast (2).
+	seedA := common.HexToHash("0x1111111111111111111111111111111111111111111111111111111111111111")
+	seedB := common.HexToHash("0x2222222222222222222222222222222222222222222222222222222222222222")
+	seedPast := common.HexToHash("0x3333333333333333333333333333333333333333333333333333333333333333")
+	em.mu.Lock()
+	em.contexts[seedA] = &RxContext{fastMode: true, vmPool: make(chan *VM, 1)}
+	em.contextEpochs[seedA] = 10
+	em.contexts[seedB] = &RxContext{fastMode: true, vmPool: make(chan *VM, 1)}
+	em.contextEpochs[seedB] = 11
+	em.mu.Unlock()
+
+	ctxPast, err := em.getContextBySeed(10, seedPast, false)
+	if err != nil {
+		t.Fatalf("getContextBySeed(seedPast) failed: %v", err)
+	}
+	defer ctxPast.DecRef()
+
+	em.mu.RLock()
+	cachedCount := len(em.contexts)
+	_, hasCurrentFast := em.contexts[seedB]
+	em.mu.RUnlock()
+	if cachedCount > MaxCachedContextsFast {
+		t.Fatalf("expected cached contexts <= %d when FastMode is enabled, got %d", MaxCachedContextsFast, cachedCount)
+	}
+	if !hasCurrentFast {
+		t.Fatal("expected newest FastMode epoch context (seedB) to be retained over older epoch")
+	}
 }

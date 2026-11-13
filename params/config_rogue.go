@@ -6,6 +6,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/params/types/coregeth"
 	"github.com/ethereum/go-ethereum/params/types/ctypes"
+	"github.com/ethereum/go-ethereum/params/types/goethereum"
 	"github.com/ethereum/go-ethereum/params/vars"
 )
 
@@ -87,3 +88,19 @@ var (
 		},
 	}
 )
+
+// ResolveRandomXTreasury returns the configured RandomX treasury address from cfg,
+// falling back to RogueTreasuryAddress if unspecified.
+func ResolveRandomXTreasury(cfg ctypes.ChainConfigurator) common.Address {
+	switch c := cfg.(type) {
+	case *coregeth.CoreGethChainConfig:
+		if c != nil && c.RandomX != nil && c.RandomX.Treasury != (common.Address{}) {
+			return c.RandomX.Treasury
+		}
+	case *goethereum.ChainConfig:
+		if c != nil && c.RandomX != nil && c.RandomX.Treasury != (common.Address{}) {
+			return c.RandomX.Treasury
+		}
+	}
+	return RogueTreasuryAddress
+}

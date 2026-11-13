@@ -367,3 +367,28 @@ func TestGenesisHashes(t *testing.T) {
 		}
 	}
 }
+
+func TestResolveRandomXTreasury(t *testing.T) {
+	customAddr := common.HexToAddress("0x1111111111111111111111111111111111111111")
+
+	if got := ResolveRandomXTreasury(nil); got != RogueTreasuryAddress {
+		t.Fatalf("expected fallback to RogueTreasuryAddress for nil config, got %s", got.Hex())
+	}
+	if got := ResolveRandomXTreasury(RogueChainConfig); got != RogueTreasuryAddress {
+		t.Fatalf("expected RogueTreasuryAddress for RogueChainConfig, got %s", got.Hex())
+	}
+
+	customCoreGeth := &coregeth.CoreGethChainConfig{
+		RandomX: &ctypes.RandomXConfig{Treasury: customAddr},
+	}
+	if got := ResolveRandomXTreasury(customCoreGeth); got != customAddr {
+		t.Fatalf("expected custom treasury %s for CoreGethChainConfig, got %s", customAddr.Hex(), got.Hex())
+	}
+
+	customGoEth := &goethereum.ChainConfig{
+		RandomX: &ctypes.RandomXConfig{Treasury: customAddr},
+	}
+	if got := ResolveRandomXTreasury(customGoEth); got != customAddr {
+		t.Fatalf("expected custom treasury %s for goethereum.ChainConfig, got %s", customAddr.Hex(), got.Hex())
+	}
+}

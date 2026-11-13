@@ -175,12 +175,19 @@ func (f *ForkChoice) ReorgNeeded(current *types.Header, extern *types.Header) (b
 		reorg = false
 		log.Warn("Reorg disallowed", "error", err)
 	} else if current.Number.Uint64()-commonHeader.Number.Uint64() > 2 {
+		var currentSpan, proposedSpan uint64
+		if current.Time > commonHeader.Time {
+			currentSpan = current.Time - commonHeader.Time
+		}
+		if extern.Time > commonHeader.Time {
+			proposedSpan = extern.Time - commonHeader.Time
+		}
 		// Reorg is allowed, only log the MESS line if old chain is longer than normal.
 		log.Info("ECBP1100-MESS 🔓",
 			"status", "accepted",
 			"age", common.PrettyAge(time.Unix(int64(commonHeader.Time), 0)),
-			"current.span", common.PrettyDuration(time.Duration(current.Time-commonHeader.Time)*time.Second),
-			"proposed.span", common.PrettyDuration(time.Duration(extern.Time-commonHeader.Time)*time.Second),
+			"current.span", common.PrettyDuration(time.Duration(currentSpan)*time.Second),
+			"proposed.span", common.PrettyDuration(time.Duration(proposedSpan)*time.Second),
 			"common.bno", commonHeader.Number.Uint64(), "common.hash", commonHeader.Hash(),
 			"current.bno", current.Number.Uint64(), "current.hash", current.Hash(),
 			"proposed.bno", extern.Number.Uint64(), "proposed.hash", extern.Hash(),
