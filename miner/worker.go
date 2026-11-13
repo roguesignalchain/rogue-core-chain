@@ -750,6 +750,9 @@ func (w *worker) taskLoop() {
 		case <-w.stopCh:
 			interrupt()
 			prev = common.Hash{}
+			w.pendingMu.Lock()
+			w.lastSealHash = common.Hash{}
+			w.pendingMu.Unlock()
 		case <-w.exitCh:
 			interrupt()
 			return

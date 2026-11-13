@@ -231,7 +231,7 @@ func (em *EpochManager) ResolveSeedForHeader(header *types.Header, chain consens
 		}
 	}
 
-	return em.GetSeed(epoch, chain)
+	return common.Hash{}, consensus.ErrUnknownAncestor
 }
 
 // GetContext returns the execution context for a given block number on the canonical chain.

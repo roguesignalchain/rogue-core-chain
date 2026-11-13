@@ -288,12 +288,10 @@ func (ctx *RxContext) ReleaseVM(vm *VM) {
 // PrewarmVMs initializes up to count VMs in parallel using GOMAXPROCS workers
 // so mining threads start with zero JIT compilation latency.
 func (ctx *RxContext) PrewarmVMs(count int) {
-	ctx.mu.RLock()
-	retired := ctx.retired
-	ctx.mu.RUnlock()
-	if retired || count <= 0 {
+	if count <= 0 || !ctx.IncRef() {
 		return
 	}
+	defer ctx.DecRef()
 
 	poolCap := cap(ctx.vmPool)
 	if count > poolCap {

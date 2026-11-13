@@ -1223,7 +1223,7 @@ func setBootstrapNodes(ctx *cli.Context, cfg *p2p.Config) {
 		case ctx.Bool(MintMeFlag.Name):
 			urls = params.MintMeBootnodes
 		case ctx.Bool(RogueFlag.Name):
-			urls = params.RogueBootnodes
+			urls = resolveRogueBootnodes()
 		case ctx.Bool(MordorFlag.Name):
 			urls = params.MordorBootnodes
 		case ctx.Bool(SepoliaFlag.Name):
@@ -1233,6 +1233,15 @@ func setBootstrapNodes(ctx *cli.Context, cfg *p2p.Config) {
 		}
 	}
 	cfg.BootstrapNodes = mustParseBootnodes(urls)
+}
+
+// resolveRogueBootnodes returns dynamic bootnodes from ROGUE_BOOTNODES (if set)
+// or falls back to params.RogueBootnodes.
+func resolveRogueBootnodes() []string {
+	if env := strings.TrimSpace(os.Getenv("ROGUE_BOOTNODES")); env != "" {
+		return SplitAndTrim(env)
+	}
+	return params.RogueBootnodes
 }
 
 func mustParseBootnodes(urls []string) []*enode.Node {
@@ -1264,7 +1273,7 @@ func setBootstrapNodesV5(ctx *cli.Context, cfg *p2p.Config) {
 	case ctx.Bool(MintMeFlag.Name):
 		urls = params.MintMeBootnodes
 	case ctx.Bool(RogueFlag.Name):
-		urls = params.RogueBootnodes
+		urls = resolveRogueBootnodes()
 	case cfg.BootstrapNodesV5 != nil:
 		return // already set, don't apply defaults.
 	}

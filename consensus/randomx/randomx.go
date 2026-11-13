@@ -221,7 +221,7 @@ func (rx *RandomX) VerifyHeader(chain consensus.ChainHeaderReader, header *types
 
 // verifyHeader performs full header validation given an already resolved parent header.
 // Phase 1 executes lightweight consensus rules in microseconds (block number continuity, ExtraData size,
-// MTP-11 + 15s drift, LWMA-1 difficulty, GasLimit bounds, and disallowed optional header fields)
+// MTP-11 + 30s drift, LWMA-1 difficulty, GasLimit bounds, and disallowed optional header fields)
 // before Phase 2 invokes the CPU-intensive RandomX CGo seal check.
 func (rx *RandomX) verifyHeader(chain consensus.ChainHeaderReader, header, parent *types.Header, seal bool) error {
 	// 1. Verify that the block number is parent's +1
@@ -239,7 +239,7 @@ func (rx *RandomX) verifyHeader(chain consensus.ChainHeaderReader, header, paren
 		return fmt.Errorf("%w: have %d bytes, max %d bytes", ErrExtraDataTooLong, len(header.Extra), MaxExtraDataSize)
 	}
 
-	// 4. Verify strict timestamp rules (MTP-11 + max 15s future drift)
+	// 4. Verify strict timestamp rules (MTP-11 + max 30s future drift)
 	now := uint64(time.Now().Unix())
 	if err := VerifyHeaderTime(chain, header, parent, now); err != nil {
 		return err

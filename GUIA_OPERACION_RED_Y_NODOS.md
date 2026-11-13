@@ -172,9 +172,18 @@ mkdir -p data-node2
   --bootnodes "ENODE_DEL_NODO_1_AQUI"
 ```
 
-### Paso 5.3: Conectar Peers Manualmente en Caliente (Opcional)
+### Paso 5.3: Inyección Dinámica vía Variable de Entorno (`ROGUE_BOOTNODES`) o Consola
 
-Si arrancaste el Nodo 2 sin `--bootnodes`, puedes enlazar los nodos en cualquier momento desde la consola interactiva del Nodo 2:
+Mientras `RogueBootnodes` permanece vacío en desarrollo, puedes inyectar uno o más bootnodes de forma dinámica sin pasar `--bootnodes` usando la variable de entorno `ROGUE_BOOTNODES` (enodes separados por coma):
+
+```bash
+ROGUE_BOOTNODES="enode://<clave-publica-nodo-1>@127.0.0.1:38888,enode://<clave-publica-nodo-2>@<IP_VPS_2>:38888" \
+  ./rogue-core-chain/build/bin/geth --rogue --datadir ./data-node3
+```
+
+*(Si se especifica `--bootnodes` por CLI, éste tiene prioridad sobre `ROGUE_BOOTNODES`.)*
+
+Si arrancaste el Nodo 2 sin `--bootnodes` ni `ROGUE_BOOTNODES`, puedes enlazar los nodos en cualquier momento desde la consola interactiva del Nodo 2:
 
 ```bash
 ./rogue-core-chain/build/bin/geth attach ./data-node2/geth.ipc

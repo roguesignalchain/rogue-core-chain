@@ -84,10 +84,10 @@ func HashToBig(hash [32]byte) *big.Int {
 // CalculateDifficulty implements the LWMA-1 (Linear Weighted Moving Average)
 // difficulty adjustment algorithm for Rogue Signal.
 //
-// Formula:
+// Formula (Zawy LWMA-1):
 //
-//	NextTarget = (AvgTarget * SolvetimeWeightSum) / (k * T * SolvetimeSum)
-//	where SolvetimeWeightSum = sum_{i=1}^{k} (i * solvetime_i)
+//	NextTarget = (AvgTarget * WeightedTimes) / (k * (k + 1) * T / 2)
+//	where WeightedTimes = sum_{i=1}^{k} (i * solvetime_i)
 //	k = min(window, blockNumber)
 func CalculateDifficulty(chain consensus.ChainHeaderReader, time uint64, parent *types.Header) (*big.Int, error) {
 	if parent == nil {
@@ -127,7 +127,6 @@ func CalculateDifficulty(chain consensus.ChainHeaderReader, time uint64, parent 
 	var (
 		sumTarget     = new(big.Int)
 		weightedTimes = int64(0)
-		sumSolveTimes = int64(0)
 		prevTime      = int64(headers[0].Time)
 	)
 
@@ -146,7 +145,6 @@ func CalculateDifficulty(chain consensus.ChainHeaderReader, time uint64, parent 
 			solvetime = int64(6 * targetTime)
 		}
 
-		sumSolveTimes += solvetime
 		weightedTimes += int64(i) * solvetime
 
 		target := DifficultyToTarget(hCurr.Difficulty)

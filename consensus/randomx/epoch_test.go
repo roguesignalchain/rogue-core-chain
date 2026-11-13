@@ -4,6 +4,8 @@ import (
 	"math/big"
 	"testing"
 
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/core/types"
 )
 
@@ -265,5 +267,30 @@ func TestRxContextRefCountAndVMPool(t *testing.T) {
 	ctx.DecRef()
 	if ctx.refs.Load() != 0 {
 		t.Fatalf("Expected refcount 0 after DecRef, got %d", ctx.refs.Load())
+	}
+}
+
+func TestResolveSeedForHeaderMissingAncestor(t *testing.T) {
+	chain := NewFakeChainReader()
+	// Provide canonical seed at 1984 so GetSeed would succeed if mistakenly used as fallback
+	canonicalSeed := &types.Header{
+		Number: big.NewInt(1984),
+		Time:   1000,
+	}
+	chain.AddHeader(canonicalSeed)
+
+	// Header at 2048 whose parent chain is missing
+	orphan := &types.Header{
+		ParentHash: common.HexToHash("0xdeadbeef"),
+		Number:     big.NewInt(2048),
+		Time:       2000,
+	}
+
+	em := NewEpochManager(false)
+	defer em.Close()
+
+	_, err := em.ResolveSeedForHeader(orphan, chain)
+	if err != consensus.ErrUnknownAncestor {
+		t.Fatalf("Expected ErrUnknownAncestor for orphan branch missing seed ancestor, got %v", err)
 	}
 }

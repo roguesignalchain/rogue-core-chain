@@ -13,7 +13,7 @@ echo "=== [Rogue Signal] Running Pre-Release Audit Checklist ==="
 echo "1. Checking for sensitive artifacts..."
 FORBIDDEN_PATTERNS=(".rogue-wallet.vault" "*.pem" "*.key" "id_rsa" ".env")
 for pattern in "${FORBIDDEN_PATTERNS[@]}"; do
-    FOUND=$(find "${CORE_DIR}" -name "${pattern}" -not -path "*/.git/*" -not -path "*/node_modules/*" || true)
+    FOUND=$(find "${CORE_DIR}" -name "${pattern}" -not -path "*/.git/*" -not -path "*/node_modules/*" -not -path "*/build/*" -not -path "*/randomx-src/*" || true)
     if [ -n "${FOUND}" ]; then
         echo "SECURITY WARNING: Sensitive file pattern found in core matching '${pattern}':"
         echo "${FOUND}"

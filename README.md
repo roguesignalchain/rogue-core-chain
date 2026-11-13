@@ -129,7 +129,7 @@ $$\text{Reward} = \left\lfloor \frac{25 \times 10^{18}}{2^{\text{Era}}} \right\r
 ### 1. Consensus Package (`consensus/randomx`)
 - **`rx_cgo.go`**: Provides thread-safe Go bindings to `librandomx.a`.
   - Implements `RxContext` containing an initialized `randomx_cache` (~256 MB) or `randomx_dataset` (~2.08 GB).
-  - Uses `sync.Pool` to maintain reusable `randomx_vm` virtual machines across worker goroutines, avoiding allocation overhead during verification or mining.
+  - Uses an elastic bounded `randomx_vm` pool (`chan *VM`) with atomic reference counting across worker goroutines, avoiding allocation overhead during verification or mining.
 - **`difficulty.go`**: Implements Zawy's **LWMA-1** algorithm.
   - Dynamically bootstraps for initial blocks ($H < 60$) using $k = \min(60, H)$.
   - Applies target clamping limiting difficulty shifts to $[67\%, 133\%]$ per block.
@@ -146,7 +146,7 @@ $$\text{Reward} = \left\lfloor \frac{25 \times 10^{18}}{2^{\text{Era}}} \right\r
   - Retains the previous epoch's cache for 128 blocks to allow reorganization validation without CPU freezing.
 - **`randomx.go`**: Full implementation of the `consensus.Engine` interface.
   - `SealHash`: Calculates canonical Keccak256 hash of header fields, excluding Nonce and MixDigest.
-  - `MiningInput`: Packs 32-byte `SealHash` and 8-byte little-endian `Nonce` into a 40-byte RandomX input blob.
+  - `MiningInput`: Packs 32-byte `SealHash` and 8-byte little-endian `Nonce` into a standard 76-byte RandomX mining blob (`rx/0`).
   - `VerifySeal`: Validates that `HashToBig(RandomX(input)) <= Target` and `header.MixDigest == RandomX(input)`.
   - `VerifyUncles`: Enforces 0 uncles (rejects blocks with uncles via `ErrUnclesNotAllowed`).
   - `Seal`: Multithreaded local miner loop for tests and solo mining.
