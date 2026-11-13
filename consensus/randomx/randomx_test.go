@@ -771,3 +771,140 @@ func FuzzVerifyHeader(f *testing.F) {
 		_, _ = CalculateDifficulty(chain, ts, h)
 	})
 }
+
+type failingReader struct{}
+
+func (failingReader) Read([]byte) (int, error) {
+	return 0, errors.New("entropy source unavailable")
+}
+
+func TestSealRandFailureFallback(t *testing.T) {
+	chain := NewFakeChainReader()
+	genesis := &types.Header{
+		Number: big.NewInt(0),
+		Time:   1000,
+	}
+	chain.AddHeader(genesis)
+
+	rx := New(Config{FastMode: false, Threads: 1})
+	defer rx.Close()
+	rx.randReader = failingReader{}
+
+	header := &types.Header{
+		ParentHash: genesis.Hash(),
+		Number:     big.NewInt(1),
+		Difficulty: big.NewInt(4),
+		Time:       1010,
+		GasLimit:   60000000,
+	}
+	block := types.NewBlock(header, nil, nil, nil, nil)
+
+	results := make(chan *types.Block, 1)
+	stop := make(chan struct{})
+	if err := rx.Seal(chain, block, results, stop); err != nil {
+		t.Fatalf("Seal failed with fallback rng: %v", err)
+	}
+
+	select {
+	case sealed := <-results:
+		if err := rx.VerifySeal(chain, sealed.Header()); err != nil {
+			t.Fatalf("VerifySeal failed for block sealed with fallback nonce: %v", err)
+		}
+	case <-time.After(15 * time.Second):
+		close(stop)
+		t.Fatal("Mining timed out after 15 seconds")
+	}
+}
+
+func TestCalcDifficultyErrorFallback(t *testing.T) {
+	rx := New(Config{FastMode: false, Threads: 1})
+	defer rx.Close()
+
+	chain := NewFakeChainReader()
+
+	// nil parent must fall back to MinDifficulty without panicking.
+	if got := rx.CalcDifficulty(chain, 1000, nil); got.Cmp(MinDifficulty) != 0 {
+		t.Fatalf("expected MinDifficulty %v for nil parent, got %v", MinDifficulty, got)
+	}
+
+	// Missing ancestor in chain causes CalculateDifficulty to fail; CalcDifficulty must fall back to parent.Difficulty.
+	parentDiff := big.NewInt(123456)
+	orphanParent := &types.Header{
+		Number:     big.NewInt(10),
+		Time:       2000,
+		Difficulty: parentDiff,
+	}
+	if got := rx.CalcDifficulty(chain, 2030, orphanParent); got.Cmp(parentDiff) != 0 {
+		t.Fatalf("expected parent.Difficulty fallback %v, got %v", parentDiff, got)
+	}
+}
+
+func TestVerifyHeaderDeterministicClock(t *testing.T) {
+	const fixedNow uint64 = 1_700_000_000
+
+	rx := New(Config{FastMode: false, Threads: 1})
+	defer rx.Close()
+	rx.nowFunc = func() uint64 { return fixedNow }
+
+	chain := NewFakeChainReader()
+	var parent *types.Header
+	// Build a 12-block chain (0..11) with increasing timestamps ending at fixedNow - 100.
+	baseTime := fixedNow - 100 - 11*30
+	for i := uint64(0); i <= 11; i++ {
+		h := &types.Header{
+			Number:     new(big.Int).SetUint64(i),
+			Time:       baseTime + i*30,
+			Difficulty: new(big.Int).Set(MinDifficulty),
+			GasLimit:   60000000,
+			UncleHash:  types.EmptyUncleHash,
+		}
+		if parent != nil {
+			h.ParentHash = parent.Hash()
+		}
+		chain.AddHeader(h)
+		parent = h
+	}
+
+	// Calculate MTP-11 for parent (blocks 1..11, median is block 6).
+	mtp := CalculateMTP11(chain, parent)
+
+	makeCandidate := func(ts uint64) *types.Header {
+		diff, err := CalculateDifficulty(chain, ts, parent)
+		if err != nil {
+			t.Fatalf("CalculateDifficulty failed: %v", err)
+		}
+		return &types.Header{
+			ParentHash: parent.Hash(),
+			Number:     big.NewInt(12),
+			Time:       ts,
+			Difficulty: diff,
+			GasLimit:   parent.GasLimit,
+			UncleHash:  types.EmptyUncleHash,
+		}
+	}
+
+	// 1. Exact MaxFutureDrift (+30s) must be accepted.
+	if err := rx.verifyHeader(chain, makeCandidate(fixedNow+MaxFutureDrift), parent, false); err != nil {
+		t.Fatalf("expected +30s drift to pass, got: %v", err)
+	}
+
+	// 2. +31s drift must be rejected with consensus.ErrFutureBlock.
+	if err := rx.verifyHeader(chain, makeCandidate(fixedNow+MaxFutureDrift+1), parent, false); !errors.Is(err, consensus.ErrFutureBlock) {
+		t.Fatalf("expected consensus.ErrFutureBlock for +31s drift, got: %v", err)
+	}
+
+	// 3. Exact MTP-11 timestamp must be rejected with ErrOlderBlockTime.
+	if err := rx.verifyHeader(chain, makeCandidate(mtp), parent, false); !errors.Is(err, ErrOlderBlockTime) {
+		t.Fatalf("expected ErrOlderBlockTime for timestamp == MTP-11, got: %v", err)
+	}
+
+	// 4. MTP-11 + 1s must be accepted.
+	if err := rx.verifyHeader(chain, makeCandidate(mtp+1), parent, false); err != nil {
+		t.Fatalf("expected MTP-11 + 1s to pass, got: %v", err)
+	}
+
+	// 5. timestamp < MTP-11 must also be rejected with ErrOlderBlockTime.
+	if err := rx.verifyHeader(chain, makeCandidate(mtp-1), parent, false); !errors.Is(err, ErrOlderBlockTime) {
+		t.Fatalf("expected ErrOlderBlockTime for timestamp < MTP-11, got: %v", err)
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"math/big"
 	"runtime"
 	"sync"
@@ -114,7 +115,25 @@ type RandomX struct {
 	tracker  hashrateTracker
 	hashrate metrics.Meter
 
+	// Optional test hooks; nil falls back to time.Now().Unix() and crypto/rand.Reader.
+	nowFunc    func() uint64
+	randReader io.Reader
+
 	lock sync.RWMutex
+}
+
+func (rx *RandomX) currentUnixTime() uint64 {
+	if rx.nowFunc != nil {
+		return rx.nowFunc()
+	}
+	return uint64(time.Now().Unix())
+}
+
+func (rx *RandomX) randSource() io.Reader {
+	if rx.randReader != nil {
+		return rx.randReader
+	}
+	return rand.Reader
 }
 
 // Config defines the configuration options for RandomX consensus engine.
@@ -246,7 +265,7 @@ func (rx *RandomX) verifyHeader(chain consensus.ChainHeaderReader, header, paren
 	}
 
 	// 4. Verify strict timestamp rules (MTP-11 + max 30s future drift)
-	now := uint64(time.Now().Unix())
+	now := rx.currentUnixTime()
 	if err := VerifyHeaderTime(chain, header, parent, now); err != nil {
 		return err
 	}
@@ -610,9 +629,20 @@ func (rx *RandomX) Seal(chain consensus.ChainHeaderReader, block *types.Block, r
 	targetBE := TargetToBytes32(DifficultyToTarget(header.Difficulty))
 	sealHash := rx.SealHash(header)
 
-	var baseNonceBuf [8]byte
-	_, _ = rand.Read(baseNonceBuf[:])
-	baseNonce := binary.LittleEndian.Uint64(baseNonceBuf[:])
+	var (
+		baseNonceBuf [8]byte
+		baseNonce    uint64
+	)
+	if _, err := io.ReadFull(rx.randSource(), baseNonceBuf[:]); err != nil {
+		baseNonce = uint64(time.Now().UnixNano()) ^ header.Number.Uint64()
+		log.Warn("RandomX Seal: crypto/rand failed, falling back to time-based nonce",
+			"err", err,
+			"block", header.Number,
+			"fallbackNonce", baseNonce,
+		)
+	} else {
+		baseNonce = binary.LittleEndian.Uint64(baseNonceBuf[:])
+	}
 
 	var (
 		foundNonce uint64
@@ -726,10 +756,31 @@ func (rx *RandomX) markAttempts(attempts int64) {
 func (rx *RandomX) CalcDifficulty(chain consensus.ChainHeaderReader, time uint64, parent *types.Header) *big.Int {
 	diff, err := CalculateDifficulty(chain, time, parent)
 	if err != nil {
-		if parent != nil && parent.Difficulty != nil {
-			return new(big.Int).Set(parent.Difficulty)
+		var (
+			parentNum  uint64
+			parentHash common.Hash
+			fallback   *big.Int
+		)
+		if parent != nil {
+			if parent.Number != nil {
+				parentNum = parent.Number.Uint64()
+			}
+			parentHash = parent.Hash()
+			if parent.Difficulty != nil {
+				fallback = new(big.Int).Set(parent.Difficulty)
+			}
 		}
-		return new(big.Int).Set(MinDifficulty)
+		if fallback == nil {
+			fallback = new(big.Int).Set(MinDifficulty)
+		}
+		log.Warn("RandomX CalcDifficulty: failed to compute LWMA-1 difficulty, using fallback",
+			"err", err,
+			"parentNumber", parentNum,
+			"parentHash", parentHash,
+			"time", time,
+			"fallback", fallback,
+		)
+		return fallback
 	}
 	return diff
 }
