@@ -75,8 +75,10 @@ func ValidateTransaction(tx *types.Transaction, head *types.Header, signer types
 	if !eip4844Enabled && tx.Type() == types.BlobTxType {
 		return fmt.Errorf("%w: type %d rejected, pool not yet in Cancun", core.ErrTxTypeNotSupported, tx.Type())
 	}
-	// Check whether the init code size has been exceeded
-	if opts.Config.IsEnabledByTime(opts.Config.GetEIP3860TransitionTime, &head.Time) && tx.To() == nil && uint64(len(tx.Data())) > vars.MaxInitCodeSize {
+	// Check whether the init code size has been exceeded (supports both time-based and block-based EIP-3860 activation)
+	eip3860Enabled := opts.Config.IsEnabledByTime(opts.Config.GetEIP3860TransitionTime, &head.Time) ||
+		opts.Config.IsEnabled(opts.Config.GetEIP3860Transition, head.Number)
+	if eip3860Enabled && tx.To() == nil && uint64(len(tx.Data())) > vars.MaxInitCodeSize {
 		return fmt.Errorf("%w: code size %v, limit %v", core.ErrMaxInitCodeSizeExceeded, len(tx.Data()), vars.MaxInitCodeSize)
 	}
 	// Transactions can't be negative. This may never happen using RLP decoded
@@ -105,7 +107,7 @@ func ValidateTransaction(tx *types.Transaction, head *types.Header, signer types
 	}
 	// Ensure the transaction has more gas than the bare minimum needed to cover
 	// the transaction metadata
-	intrGas, err := core.IntrinsicGas(tx.Data(), tx.AccessList(), tx.To() == nil, true, opts.Config.IsEnabled(opts.Config.GetEIP2028Transition, head.Number), opts.Config.IsEnabledByTime(opts.Config.GetEIP3860TransitionTime, &head.Time))
+	intrGas, err := core.IntrinsicGas(tx.Data(), tx.AccessList(), tx.To() == nil, true, opts.Config.IsEnabled(opts.Config.GetEIP2028Transition, head.Number), eip3860Enabled)
 	if err != nil {
 		return err
 	}

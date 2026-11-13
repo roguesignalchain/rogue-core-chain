@@ -25,6 +25,10 @@ const (
 	// MaxCachedContextsFast is the maximum number of RandomX contexts retained in Fast Mode (~2.08GB each) to prevent OOM.
 	MaxCachedContextsFast = 2
 
+	// MaxCachedHistoricalLight is the maximum number of historical Light Mode (~256MB each) contexts
+	// cached separately so old-epoch sync/peer headers never evict active 2.08GB FastDataset contexts.
+	MaxCachedHistoricalLight = 2
+
 	// MaxResolvedSeedCache is the capacity of the O(1) header-to-seed LRU cache (~160KB RAM, covers 2 full epochs).
 	MaxResolvedSeedCache = 4096
 )
@@ -51,6 +55,11 @@ type EpochManager struct {
 	// contextEpochs tracks the highest epoch number associated with each cached seed for eviction.
 	contextEpochs map[common.Hash]uint64
 
+	// historicalLight caches Light Mode (~256MB) contexts for out-of-window historical headers separately
+	// from contexts so verifying old epochs can never evict active/precomputed FastDatasets.
+	historicalLight map[common.Hash]*RxContext
+	historicalOrder []common.Hash
+
 	// epochSeeds maps epoch number to the most recently resolved canonical 32-byte seed.
 	epochSeeds map[uint64]common.Hash
 
@@ -68,14 +77,16 @@ type EpochManager struct {
 // NewEpochManager creates a new epoch coordinator.
 func NewEpochManager(fastMode bool) *EpochManager {
 	return &EpochManager{
-		fastMode:      fastMode,
-		contexts:      make(map[common.Hash]*RxContext),
-		contextEpochs: make(map[common.Hash]uint64),
-		epochSeeds:    make(map[uint64]common.Hash),
-		resolvedSeeds: make(map[common.Hash]common.Hash, MaxResolvedSeedCache),
-		resolvedOrder: make([]common.Hash, 0, MaxResolvedSeedCache),
-		inflight:      make(map[inflightKey]*seedInit),
-		allocSem:      make(chan struct{}, 2),
+		fastMode:        fastMode,
+		contexts:        make(map[common.Hash]*RxContext),
+		contextEpochs:   make(map[common.Hash]uint64),
+		historicalLight: make(map[common.Hash]*RxContext, MaxCachedHistoricalLight),
+		historicalOrder: make([]common.Hash, 0, MaxCachedHistoricalLight),
+		epochSeeds:      make(map[uint64]common.Hash),
+		resolvedSeeds:   make(map[common.Hash]common.Hash, MaxResolvedSeedCache),
+		resolvedOrder:   make([]common.Hash, 0, MaxResolvedSeedCache),
+		inflight:        make(map[inflightKey]*seedInit),
+		allocSem:        make(chan struct{}, 2),
 	}
 }
 
@@ -250,16 +261,16 @@ func (em *EpochManager) GetContext(blockNum uint64, chain consensus.ChainHeaderR
 // GetContextForHeader returns the execution context for a specific header, resolving its seed
 // along the header's own ancestor branch so side-fork blocks across epoch boundaries verify accurately.
 func (em *EpochManager) GetContextForHeader(header *types.Header, chain consensus.ChainHeaderReader) (*RxContext, error) {
-	return em.getContextForHeaderMode(header, chain, em.IsFastMode())
+	return em.getContextForHeaderMode(header, chain, em.IsFastMode(), false)
 }
 
 // GetLightContextForHeader returns a Light Mode (~256MB) execution context for verifying
 // historical-epoch headers without allocating a 2.08GB FastDataset or evicting active mining epochs.
 func (em *EpochManager) GetLightContextForHeader(header *types.Header, chain consensus.ChainHeaderReader) (*RxContext, error) {
-	return em.getContextForHeaderMode(header, chain, false)
+	return em.getContextForHeaderMode(header, chain, false, true)
 }
 
-func (em *EpochManager) getContextForHeaderMode(header *types.Header, chain consensus.ChainHeaderReader, fastMode bool) (*RxContext, error) {
+func (em *EpochManager) getContextForHeaderMode(header *types.Header, chain consensus.ChainHeaderReader, fastMode, historical bool) (*RxContext, error) {
 	if header == nil || header.Number == nil || !header.Number.IsUint64() {
 		return nil, consensus.ErrInvalidNumber
 	}
@@ -268,21 +279,85 @@ func (em *EpochManager) getContextForHeaderMode(header *types.Header, chain cons
 	if err != nil {
 		return nil, err
 	}
-	return em.getContextBySeed(epoch, seed, fastMode)
+	return em.getContextBySeedWithMode(epoch, seed, fastMode, historical)
 }
 
 func (em *EpochManager) getContextBySeed(epoch uint64, seed common.Hash, targetFast bool) (*RxContext, error) {
+	return em.getContextBySeedWithMode(epoch, seed, targetFast, !targetFast && em.IsFastMode())
+}
+
+// lookupCachedContextLocked returns an active reference to an existing cached context matching targetFast
+// across primary contexts and (for Light queries) the bounded historicalLight cache. Caller must hold mu.
+func (em *EpochManager) lookupCachedContextLocked(seed common.Hash, targetFast bool) *RxContext {
+	if ctx, exists := em.contexts[seed]; exists && ctx != nil && (ctx.fastMode == targetFast || (!targetFast && ctx.fastMode)) && ctx.IncRef() {
+		return ctx
+	}
+	if !targetFast {
+		if ctx, exists := em.historicalLight[seed]; exists && ctx != nil && ctx.IncRef() {
+			return ctx
+		}
+	}
+	return nil
+}
+
+// removeHistoricalLightLocked deletes seed from the historical Light cache and evicts/closes it if present.
+// Caller must hold mu.Lock().
+func (em *EpochManager) removeHistoricalLightLocked(seed common.Hash) {
+	if ctx, exists := em.historicalLight[seed]; exists {
+		if ctx != nil {
+			ctx.Close()
+		}
+		delete(em.historicalLight, seed)
+	}
+	for i, s := range em.historicalOrder {
+		if s == seed {
+			em.historicalOrder = append(em.historicalOrder[:i], em.historicalOrder[i+1:]...)
+			break
+		}
+	}
+}
+
+// storeHistoricalLightLocked caches a bounded Light Mode context for historical verification without
+// ever disturbing active FastDataset or Light contexts in em.contexts. Caller must hold mu.Lock().
+func (em *EpochManager) storeHistoricalLightLocked(seed common.Hash, newCtx *RxContext) {
+	if oldCtx, exists := em.historicalLight[seed]; exists {
+		if oldCtx != nil && oldCtx != newCtx {
+			oldCtx.Close()
+		}
+		for i, s := range em.historicalOrder {
+			if s == seed {
+				em.historicalOrder = append(em.historicalOrder[:i], em.historicalOrder[i+1:]...)
+				break
+			}
+		}
+	}
+	em.historicalLight[seed] = newCtx
+	em.historicalOrder = append(em.historicalOrder, seed)
+
+	for len(em.historicalLight) > MaxCachedHistoricalLight && len(em.historicalOrder) > 0 {
+		oldest := em.historicalOrder[0]
+		em.historicalOrder = em.historicalOrder[1:]
+		if oldest == seed {
+			continue
+		}
+		if staleCtx, ok := em.historicalLight[oldest]; ok && staleCtx != nil {
+			staleCtx.Close()
+		}
+		delete(em.historicalLight, oldest)
+	}
+}
+
+func (em *EpochManager) getContextBySeedWithMode(epoch uint64, seed common.Hash, targetFast, historical bool) (*RxContext, error) {
 	for {
 		em.mu.RLock()
-		ctx, exists := em.contexts[seed]
-		if exists && ctx != nil && (ctx.fastMode == targetFast || (!targetFast && ctx.fastMode)) && ctx.IncRef() {
+		if ctx := em.lookupCachedContextLocked(seed, targetFast); ctx != nil {
 			em.mu.RUnlock()
 			return ctx, nil
 		}
 		em.mu.RUnlock()
 
 		em.mu.Lock()
-		if ctx, exists = em.contexts[seed]; exists && ctx != nil && (ctx.fastMode == targetFast || (!targetFast && ctx.fastMode)) && ctx.IncRef() {
+		if ctx := em.lookupCachedContextLocked(seed, targetFast); ctx != nil {
 			em.mu.Unlock()
 			return ctx, nil
 		}
@@ -322,57 +397,63 @@ func (em *EpochManager) getContextBySeed(epoch uint64, seed common.Hash, targetF
 		// Acquire caller's reference before storing/publishing the context
 		newCtx.IncRef()
 
-		// If another context was stored for this seed (e.g. previous mode), retire it lazily.
-		if oldCtx, hadOld := em.contexts[seed]; hadOld && oldCtx != nil && oldCtx != newCtx {
-			oldCtx.Close()
-		}
-		em.contexts[seed] = newCtx
-		if prevEp, ok := em.contextEpochs[seed]; !ok || epoch > prevEp {
-			em.contextEpochs[seed] = epoch
-		}
+		if historical && !targetFast {
+			// Store in dedicated bounded historical Light cache so active 2.08GB FastDatasets are never evicted.
+			em.storeHistoricalLightLocked(seed, newCtx)
+		} else {
+			// Retire any stale historical Light copy of the same seed before publishing into primary contexts.
+			em.removeHistoricalLightLocked(seed)
 
-		// Evict stale contexts older than epoch - 1
-		for s, ep := range em.contextEpochs {
-			if s == seed {
-				continue
+			// If another context was stored for this seed (e.g. previous mode), retire it lazily.
+			if oldCtx, hadOld := em.contexts[seed]; hadOld && oldCtx != nil && oldCtx != newCtx {
+				oldCtx.Close()
 			}
-			if ep+1 < epoch {
-				if staleCtx, ok := em.contexts[s]; ok && staleCtx != nil {
-					staleCtx.Close()
-					delete(em.contexts, s)
-				}
-				delete(em.contextEpochs, s)
+			em.contexts[seed] = newCtx
+			if prevEp, ok := em.contextEpochs[seed]; !ok || epoch > prevEp {
+				em.contextEpochs[seed] = epoch
 			}
-		}
 
-		// Bound total cached contexts (3 in Light Mode, 2 in Fast Mode to prevent >4.2GB RAM spikes),
-		// ensuring we never evict the newly created seed.
-		// If Fast Mode is active globally on the manager, enforce MaxCachedContextsFast even when
-		// caching a temporary Light context for historical verification so total RAM stays bounded.
-		maxContexts := MaxCachedContexts
-		if targetFast || em.fastMode {
-			maxContexts = MaxCachedContextsFast
-		}
-		for len(em.contexts) > maxContexts {
-			var oldestSeed common.Hash
-			var lowestEpoch uint64 = ^uint64(0)
+			// Evict stale contexts older than epoch - 1
 			for s, ep := range em.contextEpochs {
 				if s == seed {
-					continue // Protect current context from being evicted
+					continue
 				}
-				if ep < lowestEpoch {
-					lowestEpoch = ep
-					oldestSeed = s
+				if ep+1 < epoch {
+					if staleCtx, ok := em.contexts[s]; ok && staleCtx != nil {
+						staleCtx.Close()
+						delete(em.contexts, s)
+					}
+					delete(em.contextEpochs, s)
 				}
 			}
-			if lowestEpoch == ^uint64(0) || oldestSeed == (common.Hash{}) {
-				break
+
+			// Bound primary cached contexts (3 in Light Mode, 2 in Fast Mode to prevent >4.2GB RAM spikes),
+			// ensuring we never evict the newly created seed.
+			maxContexts := MaxCachedContexts
+			if targetFast || em.fastMode {
+				maxContexts = MaxCachedContextsFast
 			}
-			if staleCtx, ok := em.contexts[oldestSeed]; ok && staleCtx != nil {
-				staleCtx.Close()
-				delete(em.contexts, oldestSeed)
+			for len(em.contexts) > maxContexts {
+				var oldestSeed common.Hash
+				var lowestEpoch uint64 = ^uint64(0)
+				for s, ep := range em.contextEpochs {
+					if s == seed {
+						continue // Protect current context from being evicted
+					}
+					if ep < lowestEpoch {
+						lowestEpoch = ep
+						oldestSeed = s
+					}
+				}
+				if lowestEpoch == ^uint64(0) || oldestSeed == (common.Hash{}) {
+					break
+				}
+				if staleCtx, ok := em.contexts[oldestSeed]; ok && staleCtx != nil {
+					staleCtx.Close()
+					delete(em.contexts, oldestSeed)
+				}
+				delete(em.contextEpochs, oldestSeed)
 			}
-			delete(em.contextEpochs, oldestSeed)
 		}
 
 		initCall.ctx = newCtx
@@ -416,7 +497,7 @@ func (em *EpochManager) PrecomputeNextEpoch(blockNum uint64, chain consensus.Cha
 			em.epochSeeds[nextEpoch] = seed
 			em.mu.Unlock()
 
-			if ctx, err := em.getContextBySeed(nextEpoch, seed, targetFast); err == nil && ctx != nil {
+			if ctx, err := em.getContextBySeedWithMode(nextEpoch, seed, targetFast, false); err == nil && ctx != nil {
 				ctx.DecRef()
 			}
 		}()
@@ -432,15 +513,20 @@ func (em *EpochManager) PurgeAllVMs() {
 			ctx.PurgeVMs()
 		}
 	}
+	for _, ctx := range em.historicalLight {
+		if ctx != nil {
+			ctx.PurgeVMs()
+		}
+	}
 }
 
 // VMPoolStats returns aggregated VM pool counts and estimated allocated CGo memory in MB.
 func (em *EpochManager) VMPoolStats() (totalVMs, activeVMs int64, allocatedMB uint64) {
 	em.mu.RLock()
 	defer em.mu.RUnlock()
-	for _, ctx := range em.contexts {
+	addStats := func(ctx *RxContext) {
 		if ctx == nil {
-			continue
+			return
 		}
 		t, a := ctx.VMPoolStats()
 		totalVMs += t
@@ -450,6 +536,12 @@ func (em *EpochManager) VMPoolStats() (totalVMs, activeVMs int64, allocatedMB ui
 		} else {
 			allocatedMB += 256 // LightCache
 		}
+	}
+	for _, ctx := range em.contexts {
+		addStats(ctx)
+	}
+	for _, ctx := range em.historicalLight {
+		addStats(ctx)
 	}
 	if totalVMs > 0 {
 		allocatedMB += uint64(totalVMs*22) / 10 // ~2.2 MB per VM
@@ -462,6 +554,11 @@ func (em *EpochManager) LargePages() bool {
 	em.mu.RLock()
 	defer em.mu.RUnlock()
 	for _, ctx := range em.contexts {
+		if ctx != nil && ctx.LargePages() {
+			return true
+		}
+	}
+	for _, ctx := range em.historicalLight {
 		if ctx != nil && ctx.LargePages() {
 			return true
 		}
@@ -483,4 +580,11 @@ func (em *EpochManager) Close() {
 	for s := range em.contextEpochs {
 		delete(em.contextEpochs, s)
 	}
+	for s, ctx := range em.historicalLight {
+		if ctx != nil {
+			ctx.Close()
+		}
+		delete(em.historicalLight, s)
+	}
+	em.historicalOrder = em.historicalOrder[:0]
 }

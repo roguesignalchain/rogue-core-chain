@@ -243,7 +243,8 @@ func makeFullNode(ctx *cli.Context) (*node.Node, ethapi.Backend) {
 		}
 		catalyst.RegisterSimulatedBeaconAPIs(stack, simBeacon)
 		stack.RegisterLifecycle(simBeacon)
-	} else {
+	} else if cfg := eth.BlockChain().Config(); cfg == nil || !cfg.GetConsensusEngineType().IsRandomX() {
+		// PoW RandomX chains do not use the Engine API / Beacon catalyst service.
 		err := catalyst.Register(stack, eth)
 		if err != nil {
 			utils.Fatalf("failed to register catalyst service: %v", err)

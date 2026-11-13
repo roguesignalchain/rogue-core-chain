@@ -268,17 +268,20 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		}
 	}
 
-	if config.BlobPool.Datadir != "" {
-		config.BlobPool.Datadir = stack.ResolvePath(config.BlobPool.Datadir)
-	}
-	blobPool := blobpool.New(config.BlobPool, eth.blockchain)
-
 	if config.TxPool.Journal != "" {
 		config.TxPool.Journal = stack.ResolvePath(config.TxPool.Journal)
 	}
 	legacyPool := legacypool.New(config.TxPool, eth.blockchain)
+	subpools := []txpool.SubPool{legacyPool}
 
-	eth.txPool, err = txpool.New(config.TxPool.PriceLimit, eth.blockchain, []txpool.SubPool{legacyPool, blobPool})
+	if !eth.blockchain.Config().GetConsensusEngineType().IsRandomX() {
+		if config.BlobPool.Datadir != "" {
+			config.BlobPool.Datadir = stack.ResolvePath(config.BlobPool.Datadir)
+		}
+		subpools = append(subpools, blobpool.New(config.BlobPool, eth.blockchain))
+	}
+
+	eth.txPool, err = txpool.New(config.TxPool.PriceLimit, eth.blockchain, subpools)
 	if err != nil {
 		return nil, err
 	}

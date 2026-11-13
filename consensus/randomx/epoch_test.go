@@ -458,11 +458,14 @@ func TestGetLightContextForHeader(t *testing.T) {
 		t.Fatal("expected GetLightContextForHeader to reuse already-cached Light context")
 	}
 
-	// Verify FastMode global cap: even when inserting a Light context for historical verification,
-	// total cached contexts must remain bounded by MaxCachedContextsFast (2).
+	// Verify historical Light isolation: loading historical Light contexts (e.g. from peer side-chains
+	// or historical epoch verification) must stay bounded in historicalLight (<= MaxCachedHistoricalLight)
+	// and MUST NEVER evict active or precomputed FastMode contexts (seedA and seedB).
 	seedA := common.HexToHash("0x1111111111111111111111111111111111111111111111111111111111111111")
 	seedB := common.HexToHash("0x2222222222222222222222222222222222222222222222222222222222222222")
-	seedPast := common.HexToHash("0x3333333333333333333333333333333333333333333333333333333333333333")
+	seedPast1 := common.HexToHash("0x3333333333333333333333333333333333333333333333333333333333333333")
+	seedPast2 := common.HexToHash("0x4444444444444444444444444444444444444444444444444444444444444444")
+	seedPast3 := common.HexToHash("0x5555555555555555555555555555555555555555555555555555555555555555")
 	em.mu.Lock()
 	em.contexts[seedA] = &RxContext{fastMode: true, vmPool: make(chan *VM, 1)}
 	em.contextEpochs[seedA] = 10
@@ -470,20 +473,30 @@ func TestGetLightContextForHeader(t *testing.T) {
 	em.contextEpochs[seedB] = 11
 	em.mu.Unlock()
 
-	ctxPast, err := em.getContextBySeed(10, seedPast, false)
-	if err != nil {
-		t.Fatalf("getContextBySeed(seedPast) failed: %v", err)
+	for _, pastSeed := range []common.Hash{seedPast1, seedPast2, seedPast3} {
+		ctxPast, err := em.getContextBySeed(5, pastSeed, false)
+		if err != nil {
+			t.Fatalf("getContextBySeed(%x) failed: %v", pastSeed[:4], err)
+		}
+		ctxPast.DecRef()
 	}
-	defer ctxPast.DecRef()
 
 	em.mu.RLock()
-	cachedCount := len(em.contexts)
+	cachedFastCount := len(em.contexts)
+	_, hasPrevFast := em.contexts[seedA]
 	_, hasCurrentFast := em.contexts[seedB]
+	histCount := len(em.historicalLight)
+	_, hasOldestHist := em.historicalLight[seedPast1]
+	_, hasNewestHist := em.historicalLight[seedPast3]
 	em.mu.RUnlock()
-	if cachedCount > MaxCachedContextsFast {
-		t.Fatalf("expected cached contexts <= %d when FastMode is enabled, got %d", MaxCachedContextsFast, cachedCount)
+
+	if cachedFastCount != 2 || !hasPrevFast || !hasCurrentFast {
+		t.Fatalf("historical Light verification evicted active FastMode contexts: count=%d hasA=%v hasB=%v", cachedFastCount, hasPrevFast, hasCurrentFast)
 	}
-	if !hasCurrentFast {
-		t.Fatal("expected newest FastMode epoch context (seedB) to be retained over older epoch")
+	if histCount != MaxCachedHistoricalLight {
+		t.Fatalf("expected historicalLight cache size=%d, got %d", MaxCachedHistoricalLight, histCount)
+	}
+	if hasOldestHist || !hasNewestHist {
+		t.Fatalf("expected FIFO eviction on historicalLight (hasOldest=%v hasNewest=%v)", hasOldestHist, hasNewestHist)
 	}
 }

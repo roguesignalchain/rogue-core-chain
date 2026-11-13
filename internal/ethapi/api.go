@@ -1907,6 +1907,14 @@ func SubmitTransaction(ctx context.Context, b Backend, tx *types.Transaction) (c
 		// Ensure only eip155 signed transactions are submitted if EIP155Required is set.
 		return common.Hash{}, errors.New("only replay-protected (EIP-155) transactions allowed over RPC")
 	}
+	if cfg := b.ChainConfig(); cfg != nil && cfg.GetConsensusEngineType().IsRandomX() {
+		if tx.Type() != types.LegacyTxType {
+			return common.Hash{}, fmt.Errorf("transaction type %d not supported on Rogue Signal: only legacy (type 0) transactions accepted", tx.Type())
+		}
+		if !tx.Protected() {
+			return common.Hash{}, errors.New("only replay-protected (EIP-155) transactions accepted on Rogue Signal")
+		}
+	}
 	if err := b.SendTx(ctx, tx); err != nil {
 		return common.Hash{}, err
 	}

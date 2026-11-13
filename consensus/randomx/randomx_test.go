@@ -4,6 +4,7 @@ import (
 	"errors"
 	"math"
 	"math/big"
+	"reflect"
 	"testing"
 	"time"
 
@@ -939,5 +940,17 @@ func TestSealNonBlockingOnPreclosedStop(t *testing.T) {
 		}
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("Seal blocked on pre-closed stop")
+	}
+}
+
+func TestAPISetFastModeRemoved(t *testing.T) {
+	rx := New(Config{FastMode: false, Threads: 1})
+	defer rx.Close()
+
+	for _, rpcAPI := range rx.APIs(nil) {
+		svc := reflect.TypeOf(rpcAPI.Service)
+		if _, found := svc.MethodByName("SetFastMode"); found {
+			t.Fatalf("RPC service %s in namespace %q must not expose SetFastMode", svc, rpcAPI.Namespace)
+		}
 	}
 }

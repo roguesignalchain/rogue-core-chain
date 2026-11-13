@@ -38,6 +38,9 @@ type sigCache struct {
 
 // MakeSigner returns a Signer based on the given chain config and block number.
 func MakeSigner(config ctypes.ChainConfigurator, blockNumber *big.Int, blockTime uint64) Signer {
+	if config.GetConsensusEngineType().IsRandomX() && config.IsEnabled(config.GetEIP155Transition, blockNumber) {
+		return NewStrictEIP155Signer(config.GetChainID())
+	}
 	var signer Signer
 	switch {
 	case config.IsEnabledByTime(config.GetEIP4844TransitionTime, &blockTime), config.IsEnabled(config.GetEIP4844Transition, blockNumber):
@@ -65,6 +68,9 @@ func MakeSigner(config ctypes.ChainConfigurator, blockNumber *big.Int, blockTime
 // have the current block number available, use MakeSigner instead.
 func LatestSigner(config ctypes.ChainConfigurator) Signer {
 	if chainID := config.GetChainID(); chainID != nil {
+		if config.GetConsensusEngineType().IsRandomX() && config.GetEIP155Transition() != nil {
+			return NewStrictEIP155Signer(chainID)
+		}
 		if config.GetEIP4844TransitionTime() != nil || config.GetEIP4844Transition() != nil {
 			return NewCancunSigner(chainID)
 		}
@@ -433,6 +439,31 @@ func (s EIP155Signer) Sender(tx *Transaction) (common.Address, error) {
 	V = new(big.Int).Sub(V, s.chainIdMul)
 	V.Sub(V, big8)
 	return recoverPlain(s.Hash(tx), R, S, V, true)
+}
+
+// StrictEIP155Signer enforces replay-protected EIP-155 legacy transactions only.
+// Unprotected pre-EIP-155 signatures (v=27/28) and typed transactions are rejected unconditionally.
+type StrictEIP155Signer struct{ EIP155Signer }
+
+// NewStrictEIP155Signer returns a Signer that requires EIP-155 replay protection
+// matching chainId for every transaction.
+func NewStrictEIP155Signer(chainId *big.Int) Signer {
+	return StrictEIP155Signer{NewEIP155Signer(chainId)}
+}
+
+func (s StrictEIP155Signer) Equal(s2 Signer) bool {
+	strict, ok := s2.(StrictEIP155Signer)
+	return ok && strict.EIP155Signer.Equal(s.EIP155Signer)
+}
+
+func (s StrictEIP155Signer) Sender(tx *Transaction) (common.Address, error) {
+	if tx.Type() != LegacyTxType {
+		return common.Address{}, ErrTxTypeNotSupported
+	}
+	if !tx.Protected() {
+		return common.Address{}, ErrInvalidChainId
+	}
+	return s.EIP155Signer.Sender(tx)
 }
 
 // SignatureValues returns signature values. This signature

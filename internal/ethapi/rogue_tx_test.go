@@ -26,6 +26,10 @@ func (b *rogueTxTestBackend) SendTx(ctx context.Context, signedTx *types.Transac
 	return nil
 }
 
+func (b *rogueTxTestBackend) UnprotectedAllowed() bool {
+	return true
+}
+
 func TestSendRawTransactionRogueLegacyOnly(t *testing.T) {
 	t.Parallel()
 
@@ -118,6 +122,22 @@ func TestSendRawTransactionRogueLegacyOnly(t *testing.T) {
 	rawWrong, _ := txWrongChain.MarshalBinary()
 	if _, err := txAPI.SendRawTransaction(context.Background(), hexutil.Bytes(rawWrong)); err == nil {
 		t.Fatal("expected LegacyTx with wrong ChainID to be rejected")
+	}
+
+	// 4b. Unprotected pre-EIP-155 LegacyTx must be rejected even if UnprotectedAllowed() returns true
+	txUnprotected, err := types.SignTx(types.NewTx(&types.LegacyTx{
+		Nonce:    0,
+		To:       &accounts[1].addr,
+		Value:    big.NewInt(1000),
+		Gas:      vars.TxGas,
+		GasPrice: big.NewInt(vars.GWei),
+	}), types.HomesteadSigner{}, accounts[0].key)
+	if err != nil {
+		t.Fatalf("failed to sign unprotected LegacyTx: %v", err)
+	}
+	rawUnprotected, _ := txUnprotected.MarshalBinary()
+	if _, err := txAPI.SendRawTransaction(context.Background(), hexutil.Bytes(rawUnprotected)); err == nil || !strings.Contains(err.Error(), "replay-protected (EIP-155)") {
+		t.Fatalf("expected unprotected LegacyTx rejection on Rogue Signal, got %v", err)
 	}
 
 	// 5. Valid EIP-155 LegacyTx (ChainID 800055) must be accepted
