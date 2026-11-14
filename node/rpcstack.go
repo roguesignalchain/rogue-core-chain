@@ -18,6 +18,7 @@ package node
 
 import (
 	"compress/gzip"
+	"container/list"
 	"context"
 	"errors"
 	"fmt"
@@ -97,14 +98,17 @@ type httpServer struct {
 
 	ipRateMu    sync.Mutex
 	ipBuckets   map[string]*ipBucket
+	ipLRU       *list.List
 	rpsLimit    int
 	rpsBurst    int
 	lastCleanup time.Time
 }
 
 type ipBucket struct {
+	key      string
 	tokens   float64
 	lastSeen time.Time
+	elem     *list.Element
 }
 
 type clientIPContextKey struct{}
@@ -128,6 +132,7 @@ func newHTTPServer(log log.Logger, timeouts rpc.HTTPTimeouts) *httpServer {
 		ipConns:       make(map[string]int),
 		maxConnsPerIP: maxHTTPConnsPerIP,
 		ipBuckets:     make(map[string]*ipBucket),
+		ipLRU:         list.New(),
 		rpsLimit:      defaultHTTPRPSLimit,
 		rpsBurst:      defaultHTTPRPSBurst,
 		lastCleanup:   time.Now(),
@@ -396,29 +401,18 @@ func (h *httpServer) allowRPCCost(ctx context.Context, cost int) bool {
 	}
 
 	now := time.Now()
-	if now.Sub(h.lastCleanup) > time.Minute || len(h.ipBuckets) >= maxTrackedIPBuckets {
-		for k, b := range h.ipBuckets {
-			if now.Sub(b.lastSeen) > ipBucketTTL {
-				delete(h.ipBuckets, k)
-			}
-		}
-		h.lastCleanup = now
-		for len(h.ipBuckets) >= maxTrackedIPBuckets {
-			var oldestKey string
-			var oldestTime time.Time
-			first := true
-			for k, b := range h.ipBuckets {
-				if first || b.lastSeen.Before(oldestTime) {
-					oldestKey = k
-					oldestTime = b.lastSeen
-					first = false
-				}
-			}
-			if oldestKey == "" {
+	if now.Sub(h.lastCleanup) > time.Minute {
+		for elem := h.ipLRU.Back(); elem != nil; {
+			prev := elem.Prev()
+			b := elem.Value.(*ipBucket)
+			if now.Sub(b.lastSeen) <= ipBucketTTL {
 				break
 			}
-			delete(h.ipBuckets, oldestKey)
+			h.ipLRU.Remove(elem)
+			delete(h.ipBuckets, b.key)
+			elem = prev
 		}
+		h.lastCleanup = now
 	}
 
 	burst := float64(h.rpsBurst)
@@ -428,10 +422,21 @@ func (h *httpServer) allowRPCCost(ctx context.Context, cost int) bool {
 
 	b, exists := h.ipBuckets[ip]
 	if !exists {
+		for len(h.ipBuckets) >= maxTrackedIPBuckets {
+			oldest := h.ipLRU.Back()
+			if oldest == nil {
+				break
+			}
+			ob := oldest.Value.(*ipBucket)
+			h.ipLRU.Remove(oldest)
+			delete(h.ipBuckets, ob.key)
+		}
 		b = &ipBucket{
+			key:      ip,
 			tokens:   burst,
 			lastSeen: now,
 		}
+		b.elem = h.ipLRU.PushFront(b)
 		h.ipBuckets[ip] = b
 	} else {
 		elapsed := now.Sub(b.lastSeen).Seconds()
@@ -442,6 +447,7 @@ func (h *httpServer) allowRPCCost(ctx context.Context, cost int) bool {
 			}
 		}
 		b.lastSeen = now
+		h.ipLRU.MoveToFront(b.elem)
 	}
 
 	if b.tokens < float64(cost) {

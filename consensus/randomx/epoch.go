@@ -76,6 +76,9 @@ type EpochManager struct {
 	// allocSem limits concurrent CGo dataset/cache initializations to prevent memory exhaustion DoS.
 	allocSem chan struct{}
 
+	// fastAllocSem serializes ~2.34GB FastDataset builds so overlapping epoch transitions do not spike RAM.
+	fastAllocSem chan struct{}
+
 	closed atomic.Bool
 }
 
@@ -92,6 +95,7 @@ func NewEpochManager(fastMode bool) *EpochManager {
 		resolvedOrder:   make([]common.Hash, 0, MaxResolvedSeedCache),
 		inflight:        make(map[inflightKey]*seedInit),
 		allocSem:        make(chan struct{}, 2),
+		fastAllocSem:    make(chan struct{}, 1),
 	}
 }
 
@@ -317,12 +321,38 @@ func (em *EpochManager) getContextForHeaderMode(header *types.Header, chain cons
 	if header == nil || header.Number == nil || !header.Number.IsUint64() {
 		return nil, consensus.ErrInvalidNumber
 	}
-	epoch := EpochNumber(header.Number.Uint64())
+	blockNum := header.Number.Uint64()
+	epoch := EpochNumber(blockNum)
 	seed, err := em.ResolveSeedForHeader(header, chain)
 	if err != nil {
 		return nil, err
 	}
-	return em.getContextBySeedWithMode(epoch, seed, fastMode, historical)
+	ctx, err := em.getContextBySeedWithMode(epoch, seed, fastMode, historical)
+	if err != nil {
+		return nil, err
+	}
+	// Apply CacheRetentionBlocks window (128 blocks past epoch boundary) to retire superseded primary contexts.
+	if !historical && blockNum >= EpochLength && blockNum%EpochLength >= CacheRetentionBlocks {
+		em.mu.Lock()
+		em.evictSupersededEpochsLocked(epoch, seed)
+		em.mu.Unlock()
+	}
+	return ctx, nil
+}
+
+func (em *EpochManager) evictSupersededEpochsLocked(currentEpoch uint64, protectedSeed common.Hash) {
+	for s, ep := range em.contextEpochs {
+		if s == protectedSeed {
+			continue
+		}
+		if ep < currentEpoch {
+			if staleCtx, ok := em.contexts[s]; ok && staleCtx != nil {
+				staleCtx.Close()
+				delete(em.contexts, s)
+			}
+			delete(em.contextEpochs, s)
+		}
+	}
 }
 
 func (em *EpochManager) getContextBySeed(epoch uint64, seed common.Hash, targetFast bool) (*RxContext, error) {
@@ -456,10 +486,16 @@ func (em *EpochManager) getContextBySeedWithMode(epoch uint64, seed common.Hash,
 		em.mu.Unlock()
 
 		// Allocate RandomX cache/dataset outside the lock so concurrent RPCs and verifications never block.
-		// allocSem bounds concurrent allocations to prevent RAM exhaustion spikes.
+		// fastAllocSem serializes ~2.34GB FastDataset allocations; allocSem bounds total allocations.
+		if targetFast {
+			em.fastAllocSem <- struct{}{}
+		}
 		em.allocSem <- struct{}{}
 		newCtx, err := NewRxContextWithPoolCap(seed.Bytes(), targetFast, minPoolCap)
 		<-em.allocSem
+		if targetFast {
+			<-em.fastAllocSem
+		}
 
 		em.mu.Lock()
 		delete(em.inflight, key)

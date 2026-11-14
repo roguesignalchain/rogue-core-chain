@@ -665,3 +665,85 @@ func TestResolveSeedAcrossEpochBoundary4096(t *testing.T) {
 		t.Fatalf("block 4097 seed mismatch: got %s, want epoch 2 seed %s", got4097.Hex(), seedEpoch2.Hex())
 	}
 }
+
+func TestCacheRetentionBlocksEviction(t *testing.T) {
+	chain := NewFakeChainReader()
+
+	seed0Header := &types.Header{
+		Number: big.NewInt(0),
+		Time:   1000,
+		Extra:  []byte("epoch-0"),
+	}
+	chain.AddHeader(seed0Header)
+
+	seed1Block := SeedBlockNumber(1)
+	seed1Header := &types.Header{
+		Number: new(big.Int).SetUint64(seed1Block),
+		Time:   2000,
+		Extra:  []byte("epoch-1"),
+	}
+	chain.AddHeader(seed1Header)
+
+	var h2048, hRetention *types.Header
+	prev := seed1Header
+	for n := seed1Block + 1; n <= EpochLength+CacheRetentionBlocks; n++ {
+		h := &types.Header{
+			Number:     new(big.Int).SetUint64(n),
+			ParentHash: prev.Hash(),
+			Time:       2000 + n - seed1Block,
+		}
+		chain.AddHeader(h)
+		if n == EpochLength {
+			h2048 = h
+		}
+		if n == EpochLength+CacheRetentionBlocks {
+			hRetention = h
+		}
+		prev = h
+	}
+
+	em := NewEpochManager(false)
+	defer em.Close()
+
+	ctx0, err := em.GetContext(0, chain)
+	if err != nil {
+		t.Fatalf("GetContext(0) failed: %v", err)
+	}
+	ctx0.DecRef()
+
+	seed0 := seed0Header.Hash()
+	seed1 := seed1Header.Hash()
+
+	// Within the grace window [EpochLength, EpochLength+CacheRetentionBlocks), Epoch 0 must stay cached.
+	ctx2048, err := em.GetContextForHeader(h2048, chain)
+	if err != nil {
+		t.Fatalf("GetContextForHeader(2048) failed: %v", err)
+	}
+	ctx2048.DecRef()
+
+	em.mu.RLock()
+	_, hasSeed0At2048 := em.contexts[seed0]
+	_, hasSeed1At2048 := em.contexts[seed1]
+	em.mu.RUnlock()
+	if !hasSeed0At2048 || !hasSeed1At2048 {
+		t.Fatalf("expected both Epoch 0 and Epoch 1 contexts retained at block 2048 (has0=%v has1=%v)", hasSeed0At2048, hasSeed1At2048)
+	}
+
+	// Once block % EpochLength >= CacheRetentionBlocks, superseded Epoch 0 must be evicted.
+	ctxRet, err := em.GetContextForHeader(hRetention, chain)
+	if err != nil {
+		t.Fatalf("GetContextForHeader(%d) failed: %v", EpochLength+CacheRetentionBlocks, err)
+	}
+	ctxRet.DecRef()
+
+	em.mu.RLock()
+	_, hasSeed0After := em.contexts[seed0]
+	_, hasSeed1After := em.contexts[seed1]
+	em.mu.RUnlock()
+	if hasSeed0After {
+		t.Fatalf("expected superseded Epoch 0 context to be evicted at block %d", EpochLength+CacheRetentionBlocks)
+	}
+	if !hasSeed1After {
+		t.Fatalf("expected active Epoch 1 context to remain cached after retention eviction")
+	}
+}

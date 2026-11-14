@@ -169,6 +169,9 @@ func (s *Server) serveSingleRequest(ctx context.Context, codec ServerCodec) bool
 	reqs, batch, err := codec.readBatch()
 	if err != nil {
 		if err != io.EOF {
+			if s.rateLimiter != nil && !s.rateLimiter(ctx, 1) {
+				return true
+			}
 			resp := errorMessage(&invalidMessageError{"parse error"})
 			codec.writeJSON(ctx, resp, true)
 		}

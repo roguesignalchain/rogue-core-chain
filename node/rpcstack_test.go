@@ -757,3 +757,50 @@ func TestHTTPServerRPSTokenBucketAndLoopbackExemption(t *testing.T) {
 		t.Fatal("expected bucket to be exhausted")
 	}
 }
+
+func TestHTTPServerRPCLRUBoundAndInvalidJSONRateLimit(t *testing.T) {
+	// 1. Verify O(1) LRU eviction bounds ipBuckets cleanly at maxTrackedIPBuckets.
+	srv := newHTTPServer(log.Root(), rpc.DefaultHTTPTimeouts)
+	rps, burst := 100, 100
+	srv.setIPRPMLimit(&rps, &burst)
+	for i := 0; i < maxTrackedIPBuckets+64; i++ {
+		ctx := context.WithValue(context.Background(), clientIPContextKey{}, fmt.Sprintf("198.51.%d.%d", i/256, i%256))
+		if !srv.allowRPCCost(ctx, 1) {
+			t.Fatalf("unexpected rate limit at unique IP %d", i)
+		}
+	}
+	if got := len(srv.ipBuckets); got != maxTrackedIPBuckets {
+		t.Fatalf("expected ipBuckets bounded at %d, got %d", maxTrackedIPBuckets, got)
+	}
+	if got := srv.ipLRU.Len(); got != maxTrackedIPBuckets {
+		t.Fatalf("expected ipLRU len %d, got %d", maxTrackedIPBuckets, got)
+	}
+
+	// 2. Verify malformed JSON HTTP requests consume RPS tokens and trigger HTTP 429.
+	rlSrv := newHTTPServer(log.Root(), rpc.DefaultHTTPTimeouts)
+	smallRPS, smallBurst := 1, 2
+	rlSrv.setIPRPMLimit(&smallRPS, &smallBurst)
+	if err := rlSrv.enableRPC(nil, httpConfig{Vhosts: []string{"*"}}); err != nil {
+		t.Fatalf("enableRPC failed: %v", err)
+	}
+	defer rlSrv.disableRPC()
+
+	for i := 0; i < 2; i++ {
+		req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader("{bad json"))
+		req.RemoteAddr = "198.51.100.77:12345"
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		rlSrv.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected HTTP 200 JSON-RPC parse error within burst (iter %d), got %d", i, rec.Code)
+		}
+	}
+	req3 := httptest.NewRequest(http.MethodPost, "/", strings.NewReader("{bad json"))
+	req3.RemoteAddr = "198.51.100.77:12345"
+	req3.Header.Set("Content-Type", "application/json")
+	rec3 := httptest.NewRecorder()
+	rlSrv.ServeHTTP(rec3, req3)
+	if rec3.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected HTTP 429 on 3rd malformed JSON request, got %d", rec3.Code)
+	}
+}
