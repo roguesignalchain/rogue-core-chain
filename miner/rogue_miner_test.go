@@ -53,7 +53,9 @@ func TestRogueWorkerStopAndEngineReset(t *testing.T) {
 	mux := new(event.TypeMux)
 	defer mux.Stop()
 
-	w := newWorker(&DefaultConfig, params.RogueChainConfig, engine, backend, mux, nil, false)
+	cfg := DefaultConfig
+	cfg.Etherbase = testBankAddress
+	w := newWorker(&cfg, params.RogueChainConfig, engine, backend, mux, nil, false)
 	var closeOnce sync.Once
 	defer closeOnce.Do(w.close)
 
@@ -92,36 +94,54 @@ func TestRogueWorkerStopAndEngineReset(t *testing.T) {
 	}
 }
 
-func TestRogueWorkerZeroEtherbaseFallbackAndWarnReset(t *testing.T) {
-	w := &worker{}
+func TestRogueWorkerRequiresExplicitEtherbase(t *testing.T) {
+	t.Parallel()
 
-	// Initially unset (0x0)
-	if w.etherbase() != (common.Address{}) {
-		t.Fatalf("expected initial etherbase to be zero, got %x", w.etherbase())
-	}
+	db := rawdb.NewMemoryDatabase()
+	engine := randomx.New(randomx.Config{FastMode: false, Threads: 1})
+	defer engine.Close()
 
-	// Simulate first fallback warning trigger
-	if !w.warnedNoEtherbase.CompareAndSwap(false, true) {
-		t.Fatal("expected initial warnedNoEtherbase CAS to succeed")
+	gspec := &genesisT.Genesis{
+		Config:     params.RogueChainConfig,
+		GasLimit:   50000000,
+		Difficulty: big.NewInt(0x10000),
+		Alloc:      genesisT.GenesisAlloc{testBankAddress: {Balance: testBankFunds}},
 	}
-	if w.warnedNoEtherbase.CompareAndSwap(false, true) {
-		t.Fatal("expected second warnedNoEtherbase CAS to be suppressed (anti-spam)")
+	chain, err := core.NewBlockChain(db, &core.CacheConfig{TrieDirtyDisabled: true}, gspec, nil, engine, vm.Config{}, nil, nil)
+	if err != nil {
+		t.Fatalf("core.NewBlockChain failed: %v", err)
 	}
+	defer chain.Stop()
 
-	// Setting a valid etherbase must reset the warning flag
-	validAddr := common.HexToAddress("0x1111111111111111111111111111111111111111")
-	w.setEtherbase(validAddr)
-	if w.etherbase() != validAddr {
-		t.Fatalf("expected etherbase %x, got %x", validAddr, w.etherbase())
+	pool := legacypool.New(testTxPoolConfig, chain)
+	tp, err := txpool.New(testTxPoolConfig.PriceLimit, chain, []txpool.SubPool{pool})
+	if err != nil {
+		t.Fatalf("txpool.New failed: %v", err)
 	}
-	if w.warnedNoEtherbase.Load() {
-		t.Fatal("expected warnedNoEtherbase to reset when a valid etherbase is set")
-	}
+	defer tp.Close()
 
-	// Clearing etherbase back to 0x0 must allow a single warning again
-	w.setEtherbase(common.Address{})
-	if !w.warnedNoEtherbase.CompareAndSwap(false, true) {
-		t.Fatal("expected warnedNoEtherbase to fire once again after clearing etherbase")
+	backend := &testWorkerBackend{
+		chain:   chain,
+		txPool:  tp,
+		genesis: gspec,
+	}
+	mux := new(event.TypeMux)
+	defer mux.Stop()
+
+	w := newWorker(&DefaultConfig, params.RogueChainConfig, engine, backend, mux, nil, false)
+	defer w.close()
+
+	taskCh := make(chan *task, 1)
+	w.newTaskHook = func(tsk *task) {
+		taskCh <- tsk
+	}
+	w.running.Store(true)
+	w.commitWork(nil, true, time.Now().Unix())
+
+	select {
+	case tsk := <-taskCh:
+		t.Fatalf("expected commitWork to refuse mining without etherbase, got task with coinbase %s", tsk.block.Coinbase().Hex())
+	case <-time.After(150 * time.Millisecond):
 	}
 }
 
@@ -159,7 +179,9 @@ func TestRogueWorkerIgnoresSideBlockUncles(t *testing.T) {
 	mux := new(event.TypeMux)
 	defer mux.Stop()
 
-	w := newWorker(&DefaultConfig, params.RogueChainConfig, engine, backend, mux, nil, false)
+	cfg := DefaultConfig
+	cfg.Etherbase = testBankAddress
+	w := newWorker(&cfg, params.RogueChainConfig, engine, backend, mux, nil, false)
 	var closeOnce sync.Once
 	defer closeOnce.Do(w.close)
 

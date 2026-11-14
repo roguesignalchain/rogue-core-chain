@@ -37,7 +37,6 @@ import (
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/event"
 	"github.com/ethereum/go-ethereum/log"
-	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/params/mutations"
 	"github.com/ethereum/go-ethereum/params/types/ctypes"
 	"github.com/ethereum/go-ethereum/params/vars"
@@ -237,8 +236,6 @@ type worker struct {
 
 	wg sync.WaitGroup
 
-	warnedNoEtherbase atomic.Bool
-
 	current      *environment                 // An environment for current running cycle.
 	localUncles  map[common.Hash]*types.Block // A set of side blocks generated locally as the possible uncle blocks.
 	remoteUncles map[common.Hash]*types.Block // A set of side blocks as the possible uncle blocks.
@@ -363,9 +360,6 @@ func (w *worker) setEtherbase(addr common.Address) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.coinbase = addr
-	if addr != (common.Address{}) {
-		w.warnedNoEtherbase.Store(false)
-	}
 }
 
 // etherbase retrieves the configured etherbase address.
@@ -1326,10 +1320,8 @@ func (w *worker) commitWork(interrupt *atomic.Int32, noempty bool, timestamp int
 	if w.isRunning() {
 		coinbase = w.etherbase()
 		if coinbase == (common.Address{}) {
-			if w.warnedNoEtherbase.CompareAndSwap(false, true) {
-				log.Warn("No miner etherbase configured; block rewards will temporarily route to protocol treasury until --miner.etherbase is set", "treasury", params.RogueTreasuryAddress)
-			}
-			coinbase = params.RogueTreasuryAddress
+			log.Error("Refusing to mine without etherbase")
+			return
 		}
 	}
 	work, err := w.prepareWork(&generateParams{

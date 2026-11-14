@@ -482,6 +482,16 @@ func (s *Ethereum) SetEtherbase(etherbase common.Address) {
 // is already running, this method adjust the number of threads allowed to use
 // and updates the minimum price required by the transaction pool.
 func (s *Ethereum) StartMining(threads int) error {
+	// Ensure an explicit etherbase is configured before enabling mining threads or starting the worker
+	var eb common.Address
+	if !s.IsMining() {
+		var err error
+		eb, err = s.Etherbase()
+		if err != nil {
+			log.Error("Cannot start mining without etherbase", "err", err)
+			return fmt.Errorf("etherbase missing: %v", err)
+		}
+	}
 	// Update the thread count within the consensus engine
 	type threaded interface {
 		SetThreads(threads int)
@@ -501,11 +511,6 @@ func (s *Ethereum) StartMining(threads int) error {
 		s.lock.RUnlock()
 		s.txPool.SetGasTip(price)
 
-		// Configure the local mining address (fallback to protocol treasury if unset so node can mine without blocking)
-		eb, err := s.Etherbase()
-		if err != nil {
-			eb = params.RogueTreasuryAddress
-		}
 		var cli *clique.Clique
 		if c, ok := s.engine.(*clique.Clique); ok {
 			cli = c
