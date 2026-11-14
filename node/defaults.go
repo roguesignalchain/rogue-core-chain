@@ -60,7 +60,7 @@ var DefaultConfig = Config{
 	HTTPTimeouts:         rpc.DefaultHTTPTimeouts,
 	WSPort:               DefaultWSPort,
 	WSModules:            []string{"net", "web3"},
-	BatchRequestLimit:    1000,
+	BatchRequestLimit:    100,
 	BatchResponseMaxSize: 25 * 1000 * 1000,
 	GraphQLVirtualHosts:  []string{"localhost"},
 	P2P: p2p.Config{

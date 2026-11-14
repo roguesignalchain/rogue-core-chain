@@ -61,7 +61,7 @@ func (s *Server) WebsocketHandler(allowedOrigins []string) http.Handler {
 			return
 		}
 		codec := newWebsocketCodec(conn, r.Host, r.Header, wsDefaultReadLimit)
-		s.ServeCodec(codec, 0)
+		s.serveCodecWithContext(context.WithoutCancel(r.Context()), codec, 0)
 	})
 }
 
@@ -322,6 +322,14 @@ func newWebsocketCodec(conn *websocket.Conn, host string, req http.Header, readL
 func (wc *websocketCodec) close() {
 	wc.jsonCodec.close()
 	wc.wg.Wait()
+}
+
+func (wc *websocketCodec) closeWithCode(code int, reason string) {
+	wc.jsonCodec.encMu.Lock()
+	wc.conn.SetWriteDeadline(time.Now().Add(wsPingWriteTimeout))
+	_ = wc.conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(code, reason))
+	wc.jsonCodec.encMu.Unlock()
+	wc.close()
 }
 
 func (wc *websocketCodec) peerInfo() PeerInfo {

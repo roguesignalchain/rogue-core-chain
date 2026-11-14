@@ -159,9 +159,11 @@ func New(conf *Config) (*Node, error) {
 	// Configure RPC servers.
 	node.http = newHTTPServer(node.log, conf.HTTPTimeouts)
 	node.http.setIPRateLimit(conf.HTTPMaxConnsPerIP, conf.HTTPTrustedProxies)
+	node.http.setIPRPMLimit(conf.HTTPRPSLimit, conf.HTTPRPSBurst)
 	node.httpAuth = newHTTPServer(node.log, conf.HTTPTimeouts)
 	node.ws = newHTTPServer(node.log, rpc.DefaultHTTPTimeouts)
 	node.ws.setIPRateLimit(conf.HTTPMaxConnsPerIP, conf.HTTPTrustedProxies)
+	node.ws.setIPRPMLimit(conf.HTTPRPSLimit, conf.HTTPRPSBurst)
 	node.wsAuth = newHTTPServer(node.log, rpc.DefaultHTTPTimeouts)
 	node.ipc = newIPCServer(node.log, conf.IPCEndpoint())
 

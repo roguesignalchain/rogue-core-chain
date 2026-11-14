@@ -25,6 +25,11 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 )
 
+// RateLimitFunc is called before executing a decoded JSON-RPC request or batch.
+// cost is the number of JSON-RPC messages in the request/batch.
+// Returning false rejects the request/batch as rate-limited.
+type RateLimitFunc func(ctx context.Context, cost int) bool
+
 const MetadataApi = "rpc"
 const EngineApi = "engine"
 
@@ -52,6 +57,7 @@ type Server struct {
 	batchItemLimit     int
 	batchResponseLimit int
 	httpBodyLimit      int
+	rateLimiter        RateLimitFunc
 }
 
 // NewServer creates a new server instance with no registered handlers.
@@ -87,6 +93,11 @@ func (s *Server) SetHTTPBodyLimit(limit int) {
 	s.httpBodyLimit = limit
 }
 
+// SetRateLimiter configures a per-request/per-batch rate limiter callback for HTTP and WebSocket RPC.
+func (s *Server) SetRateLimiter(fn RateLimitFunc) {
+	s.rateLimiter = fn
+}
+
 // RegisterName creates a service for the given receiver type under the given name. When no
 // methods on the given receiver match the criteria to be either a RPC method or a
 // subscription an error is returned. Otherwise a new service is created and added to the
@@ -101,6 +112,10 @@ func (s *Server) RegisterName(name string, receiver interface{}) error {
 //
 // Note that codec options are no longer supported.
 func (s *Server) ServeCodec(codec ServerCodec, options CodecOption) {
+	s.serveCodecWithContext(context.Background(), codec, options)
+}
+
+func (s *Server) serveCodecWithContext(ctx context.Context, codec ServerCodec, options CodecOption) {
 	defer codec.close()
 
 	if !s.trackCodec(codec) {
@@ -112,6 +127,8 @@ func (s *Server) ServeCodec(codec ServerCodec, options CodecOption) {
 		idgen:              s.idgen,
 		batchItemLimit:     s.batchItemLimit,
 		batchResponseLimit: s.batchResponseLimit,
+		rateLimiter:        s.rateLimiter,
+		rateLimitCtx:       ctx,
 	}
 	c := initClient(codec, &s.services, cfg)
 	<-codec.closed()
@@ -138,11 +155,11 @@ func (s *Server) untrackCodec(codec ServerCodec) {
 
 // serveSingleRequest reads and processes a single RPC request from the given codec. This
 // is used to serve HTTP connections. Subscriptions and reverse calls are not allowed in
-// this mode.
-func (s *Server) serveSingleRequest(ctx context.Context, codec ServerCodec) {
+// this mode. It returns true if the request was rejected by the server's rate limiter.
+func (s *Server) serveSingleRequest(ctx context.Context, codec ServerCodec) bool {
 	// Don't serve if server is stopped.
 	if !s.run.Load() {
-		return
+		return false
 	}
 
 	h := newHandler(ctx, codec, s.idgen, &s.services, s.batchItemLimit, s.batchResponseLimit)
@@ -155,13 +172,23 @@ func (s *Server) serveSingleRequest(ctx context.Context, codec ServerCodec) {
 			resp := errorMessage(&invalidMessageError{"parse error"})
 			codec.writeJSON(ctx, resp, true)
 		}
-		return
+		return false
+	}
+	if s.rateLimiter != nil {
+		cost := len(reqs)
+		if cost == 0 {
+			cost = 1
+		}
+		if !s.rateLimiter(ctx, cost) {
+			return true
+		}
 	}
 	if batch {
 		h.handleBatch(reqs)
 	} else {
 		h.handleMsg(reqs[0])
 	}
+	return false
 }
 
 // Stop stops reading new requests, waits for stopPendingRequestTimeout to allow pending

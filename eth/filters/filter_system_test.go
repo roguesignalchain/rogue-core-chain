@@ -1044,3 +1044,24 @@ func flattenLogs(pl [][]*types.Log) []*types.Log {
 	}
 	return logs
 }
+
+func TestGetLogsMaxRange(t *testing.T) {
+	t.Parallel()
+
+	db := rawdb.NewMemoryDatabase()
+	maxRange := uint64(5)
+	_, sys := newTestFilterSystem(t, db, Config{GetLogsMaxRange: &maxRange})
+	api := NewFilterAPI(sys, false)
+
+	_, err := api.GetLogs(context.Background(), FilterCriteria{
+		FromBlock: big.NewInt(0),
+		ToBlock:   big.NewInt(10),
+	})
+	if err == nil {
+		t.Fatal("expected error when eth_getLogs range exceeds GetLogsMaxRange")
+	}
+	rpcErr, ok := err.(rpc.Error)
+	if !ok || rpcErr.ErrorCode() != -32602 {
+		t.Fatalf("expected rpc.Error with code -32602, got %T (%v)", err, err)
+	}
+}

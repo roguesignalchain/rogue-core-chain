@@ -94,11 +94,30 @@ type httpServer struct {
 	ipConns        map[string]int
 	maxConnsPerIP  int
 	trustedProxies []*net.IPNet
+
+	ipRateMu    sync.Mutex
+	ipBuckets   map[string]*ipBucket
+	rpsLimit    int
+	rpsBurst    int
+	lastCleanup time.Time
 }
 
+type ipBucket struct {
+	tokens   float64
+	lastSeen time.Time
+}
+
+type clientIPContextKey struct{}
+type clientIPExemptContextKey struct{}
+
 const (
-	shutdownTimeout   = 5 * time.Second
-	maxHTTPConnsPerIP = 100
+	shutdownTimeout      = 5 * time.Second
+	maxHTTPConnsPerIP    = 100
+	defaultHTTPRPSLimit  = 50
+	defaultHTTPRPSBurst  = 150
+	maxTrackedIPBuckets  = 16384
+	ipBucketTTL          = 5 * time.Minute
+	untrustedXFFBucketID = "untrusted-xff"
 )
 
 func newHTTPServer(log log.Logger, timeouts rpc.HTTPTimeouts) *httpServer {
@@ -108,6 +127,10 @@ func newHTTPServer(log log.Logger, timeouts rpc.HTTPTimeouts) *httpServer {
 		handlerNames:  make(map[string]string),
 		ipConns:       make(map[string]int),
 		maxConnsPerIP: maxHTTPConnsPerIP,
+		ipBuckets:     make(map[string]*ipBucket),
+		rpsLimit:      defaultHTTPRPSLimit,
+		rpsBurst:      defaultHTTPRPSBurst,
+		lastCleanup:   time.Now(),
 	}
 
 	h.httpHandler.Store((*rpcHandler)(nil))
@@ -157,6 +180,30 @@ func (h *httpServer) setIPRateLimit(maxConns *int, trustedProxies []string) {
 				Mask: net.CIDRMask(bits, bits),
 			})
 		}
+	}
+}
+
+// setIPRPMLimit configures the per-IP token-bucket RPS limit and burst capacity.
+func (h *httpServer) setIPRPMLimit(rpsLimit, rpsBurst *int) {
+	h.ipRateMu.Lock()
+	defer h.ipRateMu.Unlock()
+
+	if rpsLimit != nil {
+		if *rpsLimit <= 0 {
+			h.rpsLimit = 0
+		} else {
+			h.rpsLimit = *rpsLimit
+		}
+	}
+	if rpsBurst != nil {
+		if *rpsBurst <= 0 {
+			h.rpsBurst = h.rpsLimit
+		} else {
+			h.rpsBurst = *rpsBurst
+		}
+	}
+	if h.rpsBurst < h.rpsLimit && h.rpsLimit > 0 {
+		h.rpsBurst = h.rpsLimit
 	}
 }
 
@@ -269,19 +316,27 @@ func (h *httpServer) isTrustedProxy(ipStr string) bool {
 // clientIP resolves the real client IP using the Rightmost Untrusted IP algorithm on
 // X-Forwarded-For (with X-Real-IP fallback), strictly when r.RemoteAddr belongs to
 // configured trustedProxies. Otherwise it returns the direct peer IP (fail-closed).
+// If a trusted proxy sends malformed XFF/X-Real-IP headers with no valid IP, it returns
+// an isolated "untrusted-xff" bucket so the proxy's own IP is not penalized for other clients.
 func (h *httpServer) clientIP(r *http.Request) string {
+	ip, _ := h.resolveClientIP(r)
+	return ip
+}
+
+func (h *httpServer) resolveClientIP(r *http.Request) (ip string, viaTrustedProxy bool) {
 	peerIP, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		peerIP = r.RemoteAddr
 	}
 	if peerIP == "" {
-		return ""
+		return "", false
 	}
 	if len(h.trustedProxies) == 0 || !h.isTrustedProxy(peerIP) {
-		return peerIP
+		return peerIP, false
 	}
 
-	if xffValues := r.Header.Values("X-Forwarded-For"); len(xffValues) > 0 {
+	xffValues := r.Header.Values("X-Forwarded-For")
+	if len(xffValues) > 0 {
 		combined := strings.Join(xffValues, ",")
 		parts := strings.Split(combined, ",")
 		var lastValid string
@@ -294,21 +349,106 @@ func (h *httpServer) clientIP(r *http.Request) string {
 			normalized := parsed.String()
 			lastValid = normalized
 			if !h.isTrustedProxy(normalized) {
-				return normalized
+				return normalized, true
 			}
 		}
 		if lastValid != "" {
-			return lastValid
+			return lastValid, true
 		}
 	}
 
-	if xRealIP := strings.TrimSpace(r.Header.Get("X-Real-IP")); xRealIP != "" {
+	xRealIP := strings.TrimSpace(r.Header.Get("X-Real-IP"))
+	if xRealIP != "" {
 		if parsed := net.ParseIP(xRealIP); parsed != nil {
-			return parsed.String()
+			return parsed.String(), true
 		}
 	}
 
-	return peerIP
+	if len(xffValues) > 0 || xRealIP != "" {
+		return untrustedXFFBucketID, true
+	}
+
+	return peerIP, true
+}
+
+func isLoopbackIP(ipStr string) bool {
+	ip := net.ParseIP(ipStr)
+	return ip != nil && ip.IsLoopback()
+}
+
+func (h *httpServer) allowRPCCost(ctx context.Context, cost int) bool {
+	if cost <= 0 {
+		cost = 1
+	}
+	if exempt, _ := ctx.Value(clientIPExemptContextKey{}).(bool); exempt {
+		return true
+	}
+	ip, _ := ctx.Value(clientIPContextKey{}).(string)
+	if ip == "" {
+		return true
+	}
+
+	h.ipRateMu.Lock()
+	defer h.ipRateMu.Unlock()
+
+	if h.rpsLimit <= 0 {
+		return true
+	}
+
+	now := time.Now()
+	if now.Sub(h.lastCleanup) > time.Minute || len(h.ipBuckets) >= maxTrackedIPBuckets {
+		for k, b := range h.ipBuckets {
+			if now.Sub(b.lastSeen) > ipBucketTTL {
+				delete(h.ipBuckets, k)
+			}
+		}
+		h.lastCleanup = now
+		for len(h.ipBuckets) >= maxTrackedIPBuckets {
+			var oldestKey string
+			var oldestTime time.Time
+			first := true
+			for k, b := range h.ipBuckets {
+				if first || b.lastSeen.Before(oldestTime) {
+					oldestKey = k
+					oldestTime = b.lastSeen
+					first = false
+				}
+			}
+			if oldestKey == "" {
+				break
+			}
+			delete(h.ipBuckets, oldestKey)
+		}
+	}
+
+	burst := float64(h.rpsBurst)
+	if burst <= 0 {
+		burst = float64(h.rpsLimit)
+	}
+
+	b, exists := h.ipBuckets[ip]
+	if !exists {
+		b = &ipBucket{
+			tokens:   burst,
+			lastSeen: now,
+		}
+		h.ipBuckets[ip] = b
+	} else {
+		elapsed := now.Sub(b.lastSeen).Seconds()
+		if elapsed > 0 {
+			b.tokens += elapsed * float64(h.rpsLimit)
+			if b.tokens > burst {
+				b.tokens = burst
+			}
+		}
+		b.lastSeen = now
+	}
+
+	if b.tokens < float64(cost) {
+		return false
+	}
+	b.tokens -= float64(cost)
+	return true
 }
 
 func (h *httpServer) acquireIPSlot(remoteAddr string) (string, bool) {
@@ -332,7 +472,10 @@ func (h *httpServer) acquireIPSlot(remoteAddr string) (string, bool) {
 }
 
 func (h *httpServer) acquireRequestIPSlot(r *http.Request) (string, bool) {
-	ip := h.clientIP(r)
+	return h.acquireIPSlotByIP(h.clientIP(r))
+}
+
+func (h *httpServer) acquireIPSlotByIP(ip string) (string, bool) {
 	if ip == "" {
 		return "", true
 	}
@@ -362,13 +505,20 @@ func (h *httpServer) releaseIPSlot(ip string) {
 }
 
 func (h *httpServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if ip, ok := h.acquireRequestIPSlot(r); !ok {
+	ip, viaTrustedProxy := h.resolveClientIP(r)
+	if slotIP, ok := h.acquireIPSlotByIP(ip); !ok {
 		w.Header().Set("Retry-After", "1")
 		http.Error(w, "too many concurrent requests from IP", http.StatusTooManyRequests)
 		return
 	} else {
-		defer h.releaseIPSlot(ip)
+		defer h.releaseIPSlot(slotIP)
 	}
+
+	ctx := context.WithValue(r.Context(), clientIPContextKey{}, ip)
+	if !viaTrustedProxy && isLoopbackIP(ip) {
+		ctx = context.WithValue(ctx, clientIPExemptContextKey{}, true)
+	}
+	r = r.WithContext(ctx)
 
 	// check if ws request and serve if ws enabled
 	ws := h.wsHandler.Load().(*rpcHandler)
@@ -479,6 +629,7 @@ func (h *httpServer) enableRPC(apis []rpc.API, config httpConfig) error {
 	// Create RPC server and handler.
 	srv := rpc.NewServer()
 	srv.SetBatchLimits(config.batchItemLimit, config.batchResponseSizeLimit)
+	srv.SetRateLimiter(h.allowRPCCost)
 	if config.httpBodyLimit > 0 {
 		srv.SetHTTPBodyLimit(config.httpBodyLimit)
 	}
@@ -514,6 +665,7 @@ func (h *httpServer) enableWS(apis []rpc.API, config wsConfig) error {
 	// Create RPC server and handler.
 	srv := rpc.NewServer()
 	srv.SetBatchLimits(config.batchItemLimit, config.batchResponseSizeLimit)
+	srv.SetRateLimiter(h.allowRPCCost)
 	if config.httpBodyLimit > 0 {
 		srv.SetHTTPBodyLimit(config.httpBodyLimit)
 	}

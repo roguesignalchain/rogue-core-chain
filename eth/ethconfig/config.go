@@ -218,6 +218,10 @@ type Config struct {
 	// send-transaction variants. The unit is ether.
 	RPCTxFeeCap float64
 
+	// RPCGetLogsMaxRange is the maximum block range allowed in a single eth_getLogs query
+	// (nil uses default 10000, 0 disables the limit).
+	RPCGetLogsMaxRange *uint64 `toml:",omitempty"`
+
 	// Checkpoint is a hardcoded checkpoint which can be nil.
 	Checkpoint *ctypes.TrustedCheckpoint `toml:",omitempty"`
 

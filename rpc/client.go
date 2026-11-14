@@ -88,6 +88,8 @@ type Client struct {
 	// config fields
 	batchItemLimit       int
 	batchResponseMaxSize int
+	rateLimiter          RateLimitFunc
+	rateLimitCtx         context.Context
 
 	// writeConn is used for writing to the connection on the caller's goroutine. It should
 	// only be accessed outside of dispatch, with the write lock held. The write lock is
@@ -247,6 +249,8 @@ func initClient(conn ServerCodec, services *serviceRegistry, cfg *clientConfig) 
 		idgen:                cfg.idgen,
 		batchItemLimit:       cfg.batchItemLimit,
 		batchResponseMaxSize: cfg.batchResponseLimit,
+		rateLimiter:          cfg.rateLimiter,
+		rateLimitCtx:         cfg.rateLimitCtx,
 		writeConn:            conn,
 		close:                make(chan struct{}),
 		closing:              make(chan struct{}),
@@ -637,6 +641,9 @@ func (c *Client) dispatch(codec ServerCodec) {
 	// Spawn the initial read loop.
 	go c.read(codec)
 
+	const maxConsecutiveRateLimits = 50
+	consecutiveRateLimits := 0
+
 	for {
 		select {
 		case <-c.close:
@@ -644,6 +651,39 @@ func (c *Client) dispatch(codec ServerCodec) {
 
 		// Read path:
 		case op := <-c.readOp:
+			if c.rateLimiter != nil {
+				cost := len(op.msgs)
+				if cost == 0 {
+					cost = 1
+				}
+				rlCtx := c.rateLimitCtx
+				if rlCtx == nil {
+					rlCtx = context.Background()
+				}
+				if !c.rateLimiter(rlCtx, cost) {
+					consecutiveRateLimits++
+					resp := errorMessage(&internalServerError{code: -32005, message: "rate limit exceeded"})
+					for _, m := range op.msgs {
+						if m != nil && m.isCall() {
+							resp.ID = m.ID
+							break
+						}
+					}
+					if op.batch {
+						codec.writeJSON(rlCtx, []*jsonrpcMessage{resp}, true)
+					} else {
+						codec.writeJSON(rlCtx, resp, true)
+					}
+					if consecutiveRateLimits >= maxConsecutiveRateLimits {
+						if wc, ok := codec.(*websocketCodec); ok {
+							wc.closeWithCode(1008, "rate limit exceeded")
+							return
+						}
+					}
+					continue
+				}
+				consecutiveRateLimits = 0
+			}
 			if op.batch {
 				conn.handler.handleBatch(op.msgs)
 			} else {

@@ -332,7 +332,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("content-type", contentType)
 	codec := s.newHTTPServerConn(r, w)
 	defer codec.close()
-	s.serveSingleRequest(ctx, codec)
+	if s.serveSingleRequest(ctx, codec) {
+		w.Header().Set("Retry-After", "1")
+		http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
+	}
 }
 
 // validateRequest returns a non-zero response code and error message if the

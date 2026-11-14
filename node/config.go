@@ -148,6 +148,14 @@ type Config struct {
 	// allowed per client IP (nil uses default 100; 0 disables the limit).
 	HTTPMaxConnsPerIP *int `toml:",omitempty"`
 
+	// HTTPRPSLimit overrides the sustained per-IP JSON-RPC requests-per-second limit
+	// across HTTP and WebSocket (nil uses default 50; 0 disables RPS limiting).
+	HTTPRPSLimit *int `toml:",omitempty"`
+
+	// HTTPRPSBurst overrides the token-bucket burst capacity per client IP
+	// (nil uses default 150).
+	HTTPRPSBurst *int `toml:",omitempty"`
+
 	// AuthAddr is the listening address on which authenticated APIs are provided.
 	AuthAddr string `toml:",omitempty"`
 

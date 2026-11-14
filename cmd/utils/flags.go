@@ -821,6 +821,24 @@ var (
 		Value:    100,
 		Category: flags.APICategory,
 	}
+	HTTPRPSLimitFlag = &cli.IntFlag{
+		Name:     "http.rpslimit",
+		Usage:    "Sustained JSON-RPC requests-per-second limit per client IP across HTTP/WebSocket (0 disables)",
+		Value:    50,
+		Category: flags.APICategory,
+	}
+	HTTPRPSBurstFlag = &cli.IntFlag{
+		Name:     "http.rpsburst",
+		Usage:    "Token-bucket burst capacity per client IP for JSON-RPC rate limiting",
+		Value:    150,
+		Category: flags.APICategory,
+	}
+	RPCGetLogsMaxRangeFlag = &cli.Uint64Flag{
+		Name:     "rpc.getlogs.maxrange",
+		Usage:    "Maximum block range allowed in a single eth_getLogs query (0 disables)",
+		Value:    10000,
+		Category: flags.APICategory,
+	}
 	GraphQLEnabledFlag = &cli.BoolFlag{
 		Name:     "graphql",
 		Usage:    "Enable GraphQL on the HTTP-RPC server. Note that GraphQL can only be started if an HTTP server is started as well.",
@@ -1405,6 +1423,14 @@ func setHTTP(ctx *cli.Context, cfg *node.Config) {
 	if ctx.IsSet(HTTPMaxConnsPerIPFlag.Name) {
 		limit := ctx.Int(HTTPMaxConnsPerIPFlag.Name)
 		cfg.HTTPMaxConnsPerIP = &limit
+	}
+	if ctx.IsSet(HTTPRPSLimitFlag.Name) {
+		rps := ctx.Int(HTTPRPSLimitFlag.Name)
+		cfg.HTTPRPSLimit = &rps
+	}
+	if ctx.IsSet(HTTPRPSBurstFlag.Name) {
+		burst := ctx.Int(HTTPRPSBurstFlag.Name)
+		cfg.HTTPRPSBurst = &burst
 	}
 	if ctx.IsSet(AllowUnprotectedTxs.Name) {
 		cfg.AllowUnprotectedTxs = ctx.Bool(AllowUnprotectedTxs.Name)
@@ -2181,6 +2207,10 @@ func SetEthConfig(ctx *cli.Context, stack *node.Node, cfg *ethconfig.Config) {
 	if ctx.IsSet(RPCGlobalTxFeeCapFlag.Name) {
 		cfg.RPCTxFeeCap = ctx.Float64(RPCGlobalTxFeeCapFlag.Name)
 	}
+	if ctx.IsSet(RPCGetLogsMaxRangeFlag.Name) {
+		maxRange := ctx.Uint64(RPCGetLogsMaxRangeFlag.Name)
+		cfg.RPCGetLogsMaxRange = &maxRange
+	}
 	if ctx.IsSet(NoDiscoverFlag.Name) {
 		cfg.EthDiscoveryURLs, cfg.SnapDiscoveryURLs = []string{}, []string{}
 	} else if ctx.IsSet(DNSDiscoveryFlag.Name) {
@@ -2418,7 +2448,8 @@ func RegisterGraphQLService(stack *node.Node, backend ethapi.Backend, filterSyst
 // RegisterFilterAPI adds the eth log filtering RPC API to the node.
 func RegisterFilterAPI(stack *node.Node, backend ethapi.Backend, ethcfg *ethconfig.Config) *filters.FilterSystem {
 	filterSystem := filters.NewFilterSystem(backend, filters.Config{
-		LogCacheSize: ethcfg.FilterLogCacheSize,
+		LogCacheSize:    ethcfg.FilterLogCacheSize,
+		GetLogsMaxRange: ethcfg.RPCGetLogsMaxRange,
 	})
 	stack.RegisterAPIs([]rpc.API{{
 		Namespace: "eth",

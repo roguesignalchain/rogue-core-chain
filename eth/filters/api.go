@@ -421,6 +421,22 @@ func (api *FilterAPI) GetLogs(ctx context.Context, crit FilterCriteria) ([]*type
 		if begin > 0 && end > 0 && begin > end {
 			return nil, errInvalidBlockRange
 		}
+		if api.sys.cfg.GetLogsMaxRange != nil && *api.sys.cfg.GetLogsMaxRange > 0 {
+			maxRange := *api.sys.cfg.GetLogsMaxRange
+			resolvedBegin, err := api.resolveBlockNumber(ctx, begin)
+			if err != nil {
+				return nil, err
+			}
+			resolvedEnd, err := api.resolveBlockNumber(ctx, end)
+			if err != nil {
+				return nil, err
+			}
+			if resolvedBegin >= 0 && resolvedEnd >= resolvedBegin && uint64(resolvedEnd-resolvedBegin) > maxRange {
+				return nil, &invalidParamsError{
+					msg: fmt.Sprintf("eth_getLogs block range exceeds maximum allowed (%d > %d)", resolvedEnd-resolvedBegin, maxRange),
+				}
+			}
+		}
 		// Construct the range filter
 		filter = api.sys.NewRangeFilter(begin, end, crit.Addresses, crit.Topics)
 	}
@@ -430,6 +446,33 @@ func (api *FilterAPI) GetLogs(ctx context.Context, crit FilterCriteria) ([]*type
 		return nil, err
 	}
 	return returnLogs(logs), err
+}
+
+type invalidParamsError struct{ msg string }
+
+func (e *invalidParamsError) Error() string { return e.msg }
+func (e *invalidParamsError) ErrorCode() int { return -32602 }
+
+func (api *FilterAPI) resolveBlockNumber(ctx context.Context, num int64) (int64, error) {
+	if num >= 0 {
+		return num, nil
+	}
+	if num == rpc.EarliestBlockNumber.Int64() {
+		return 0, nil
+	}
+	hdr, err := api.sys.backend.HeaderByNumber(ctx, rpc.BlockNumber(num))
+	if err == nil && hdr != nil && hdr.Number != nil {
+		return hdr.Number.Int64(), nil
+	}
+	if num == rpc.PendingBlockNumber.Int64() {
+		if curr := api.sys.backend.CurrentHeader(); curr != nil && curr.Number != nil {
+			return curr.Number.Int64(), nil
+		}
+	}
+	if err != nil {
+		return 0, err
+	}
+	return 0, nil
 }
 
 // UninstallFilter removes the filter with the given filter id.

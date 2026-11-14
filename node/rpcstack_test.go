@@ -18,6 +18,7 @@ package node
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -716,5 +717,43 @@ func TestHTTPServerTrustedProxyAndRetryAfter(t *testing.T) {
 		if _, ok := srv.acquireRequestIPSlot(multiHopReq); !ok {
 			t.Fatalf("expected limit=0 to allow unlimited slots (failed at %d)", i)
 		}
+	}
+
+	// 6. Malformed X-Forwarded-For from a trusted proxy isolates into "untrusted-xff" bucket.
+	badXFFReq := httptest.NewRequest(http.MethodPost, "/", nil)
+	badXFFReq.RemoteAddr = "127.0.0.1:5003"
+	badXFFReq.Header.Set("X-Forwarded-For", "not-an-ip, garbage")
+	if got := srv.clientIP(badXFFReq); got != untrustedXFFBucketID {
+		t.Fatalf("expected %q for malformed XFF from trusted proxy, got %q", untrustedXFFBucketID, got)
+	}
+}
+
+func TestHTTPServerRPSTokenBucketAndLoopbackExemption(t *testing.T) {
+	srv := newHTTPServer(log.Root(), rpc.DefaultHTTPTimeouts)
+	rps, burst := 2, 3
+	srv.setIPRPMLimit(&rps, &burst)
+
+	// Direct loopback is exempt when no trusted proxy is configured.
+	loopCtx := context.WithValue(context.Background(), clientIPContextKey{}, "127.0.0.1")
+	loopCtx = context.WithValue(loopCtx, clientIPExemptContextKey{}, true)
+	for i := 0; i < 10; i++ {
+		if !srv.allowRPCCost(loopCtx, 10) {
+			t.Fatalf("expected direct loopback to be exempt from RPS limit (iter %d)", i)
+		}
+	}
+
+	// Non-loopback IP is bounded by burst=3; batch of cost=2 consumes 2 tokens, next cost=2 fails.
+	extCtx := context.WithValue(context.Background(), clientIPContextKey{}, "203.0.113.42")
+	if !srv.allowRPCCost(extCtx, 2) {
+		t.Fatal("expected first batch of cost 2 to succeed within burst 3")
+	}
+	if srv.allowRPCCost(extCtx, 2) {
+		t.Fatal("expected second batch of cost 2 to exceed remaining burst 1")
+	}
+	if !srv.allowRPCCost(extCtx, 1) {
+		t.Fatal("expected single request of cost 1 to consume final token")
+	}
+	if srv.allowRPCCost(extCtx, 1) {
+		t.Fatal("expected bucket to be exhausted")
 	}
 }

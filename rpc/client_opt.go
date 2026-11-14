@@ -17,6 +17,7 @@
 package rpc
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/gorilla/websocket"
@@ -41,6 +42,8 @@ type clientConfig struct {
 	idgen              func() ID
 	batchItemLimit     int
 	batchResponseLimit int
+	rateLimiter        RateLimitFunc
+	rateLimitCtx       context.Context
 }
 
 func (cfg *clientConfig) initHeaders() {

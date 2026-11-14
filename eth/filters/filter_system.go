@@ -39,10 +39,14 @@ import (
 	"github.com/ethereum/go-ethereum/rpc"
 )
 
+// DefaultGetLogsMaxRange is the default maximum block range allowed in a single eth_getLogs query.
+const DefaultGetLogsMaxRange = uint64(10000)
+
 // Config represents the configuration of the filter system.
 type Config struct {
-	LogCacheSize int           // maximum number of cached blocks (default: 32)
-	Timeout      time.Duration // how long filters stay active (default: 5min)
+	LogCacheSize    int           // maximum number of cached blocks (default: 32)
+	Timeout         time.Duration // how long filters stay active (default: 5min)
+	GetLogsMaxRange *uint64       // maximum block range for eth_getLogs (nil uses 10000, 0 disables)
 }
 
 func (cfg Config) withDefaults() Config {
@@ -51,6 +55,10 @@ func (cfg Config) withDefaults() Config {
 	}
 	if cfg.LogCacheSize == 0 {
 		cfg.LogCacheSize = 32
+	}
+	if cfg.GetLogsMaxRange == nil {
+		v := DefaultGetLogsMaxRange
+		cfg.GetLogsMaxRange = &v
 	}
 	return cfg
 }
