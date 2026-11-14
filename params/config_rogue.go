@@ -105,3 +105,17 @@ func ResolveRandomXTreasury(cfg ctypes.ChainConfigurator) common.Address {
 	}
 	return RogueTreasuryAddress
 }
+
+// MaxExtraDataSizeForChain returns the maximum allowed block ExtraData size in bytes
+// for the given chain configuration (64 bytes for RandomX, 32 bytes otherwise).
+func MaxExtraDataSizeForChain(cfg ctypes.ChainConfigurator) uint64 {
+	if cfg != nil && cfg.GetConsensusEngineType().IsRandomX() {
+		return vars.RogueMaximumExtraDataSize
+	}
+	if cfg != nil {
+		if max := cfg.GetMaximumExtraDataSize(); max != nil {
+			return *max
+		}
+	}
+	return vars.MaximumExtraDataSize
+}

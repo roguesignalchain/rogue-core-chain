@@ -614,6 +614,9 @@ func (w *worker) mainLoop() {
 			req.result <- w.generateWork(req.params)
 
 		case ev := <-w.chainSideCh:
+			if !w.supportsUncles() {
+				continue
+			}
 			// Short circuit for duplicate side blocks
 			if _, exist := w.localUncles[ev.Block.Hash()]; exist {
 				continue
@@ -633,7 +636,9 @@ func (w *worker) mainLoop() {
 			if w.isRunning() && w.current != nil && len(w.current.uncles) < 2 {
 				start := time.Now()
 				if err := w.commitUncle(w.current, ev.Block.Header()); err == nil {
-					w.commit(w.current.copy(), nil, true, start)
+					if err := w.commit(w.current, nil, true, start); err != nil {
+						log.Warn("Failed to commit side-block sealing work", "err", err)
+					}
 				}
 			}
 
@@ -1330,6 +1335,7 @@ func (w *worker) commitWork(interrupt *atomic.Int32, noempty bool, timestamp int
 	work, err := w.prepareWork(&generateParams{
 		timestamp: uint64(timestamp),
 		coinbase:  coinbase,
+		noUncle:   !w.supportsUncles(),
 	})
 	if err != nil {
 		return
@@ -1344,7 +1350,9 @@ func (w *worker) commitWork(interrupt *atomic.Int32, noempty bool, timestamp int
 		hasPendingTxs = pending > 0
 	}
 	if !noempty && !w.noempty.Load() && hasPendingTxs {
-		w.commit(work.copy(), nil, false, start)
+		if err := w.commit(work, nil, false, start); err != nil {
+			log.Warn("Failed to commit pre-sealing empty work", "err", err)
+		}
 	}
 	// Fill pending transactions from the txpool into the block.
 	err = w.fillTransactions(interrupt, work)
@@ -1376,7 +1384,9 @@ func (w *worker) commitWork(interrupt *atomic.Int32, noempty bool, timestamp int
 		return
 	}
 	// Submit the generated block for consensus sealing.
-	w.commit(work.copy(), w.fullTaskHook, true, start)
+	if err := w.commit(work, w.fullTaskHook, true, start); err != nil {
+		log.Warn("Failed to commit sealing work", "err", err)
+	}
 
 	// Swap out the old work with the new one, terminating any leftover
 	// prefetcher processes in the mean time and starting a new one.
@@ -1386,10 +1396,15 @@ func (w *worker) commitWork(interrupt *atomic.Int32, noempty bool, timestamp int
 	w.current = work
 }
 
+// supportsUncles returns false for RandomX chains because uncles are prohibited
+// by consensus (ErrUnclesNotAllowed).
+func (w *worker) supportsUncles() bool {
+	return w.chainConfig == nil || !w.chainConfig.GetConsensusEngineType().IsRandomX()
+}
+
 // commit runs any post-transaction state modifications, assembles the final block
 // and commits new work if consensus engine is running.
-// Note the assumption is held that the mutation is allowed to the passed env, do
-// the deep copy first.
+// commit deep-copies env internally when running so callers can pass work directly.
 func (w *worker) commit(env *environment, interval func(), update bool, start time.Time) error {
 	if w.isRunning() {
 		if interval != nil {
@@ -1401,6 +1416,7 @@ func (w *worker) commit(env *environment, interval func(), update bool, start ti
 		// Withdrawals are set to nil here, because this is only called in PoW.
 		block, err := w.engine.FinalizeAndAssemble(w.chain, env.header, env.state, env.txs, env.unclelist(), env.receipts, nil)
 		if err != nil {
+			env.discard()
 			return err
 		}
 		// If we're post merge, just ignore

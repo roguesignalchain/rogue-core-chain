@@ -56,8 +56,9 @@ var (
 	GasLimitBoundDivisor uint64 = 1024 // The bound divisor of the gas limit, used in update calculations.
 	MinGasLimit          uint64 = 5000 // Minimum the gas limit may ever be.
 
-	MaximumExtraDataSize uint64 = 32              // Maximum size extra data may be after Genesis.
-	MaxCodeSize          uint64 = 24576           // Maximum bytecode to permit for a contract
+	MaximumExtraDataSize      uint64 = 32              // Maximum size extra data may be after Genesis.
+	RogueMaximumExtraDataSize uint64 = 64              // Maximum size extra data allowed on Rogue Signal RandomX chains.
+	MaxCodeSize               uint64 = 24576           // Maximum bytecode to permit for a contract
 	MaxInitCodeSize             = 2 * MaxCodeSize // Maximum initcode to permit in a creation transaction and create instructions
 )
 

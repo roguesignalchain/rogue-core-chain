@@ -311,7 +311,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 	}
 
 	eth.miner = miner.New(eth, &config.Miner, eth.blockchain.Config(), eth.EventMux(), eth.engine, eth.isLocalBlock)
-	eth.miner.SetExtra(makeExtraData(config.Miner.ExtraData))
+	eth.miner.SetExtra(makeExtraDataForChain(config.Miner.ExtraData, eth.blockchain.Config()))
 
 	eth.APIBackend = &EthAPIBackend{stack.Config().ExtRPCEnabled(), stack.Config().AllowUnprotectedTxs, eth, nil}
 	if eth.APIBackend.allowUnprotectedTxs {
@@ -349,6 +349,10 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 }
 
 func makeExtraData(extra []byte) []byte {
+	return makeExtraDataForChain(extra, nil)
+}
+
+func makeExtraDataForChain(extra []byte, chainConfig ctypes.ChainConfigurator) []byte {
 	if len(extra) == 0 {
 		// create default extradata
 		extra, _ = rlp.EncodeToBytes([]interface{}{
@@ -358,8 +362,9 @@ func makeExtraData(extra []byte) []byte {
 			runtime.GOOS,
 		})
 	}
-	if uint64(len(extra)) > vars.MaximumExtraDataSize {
-		log.Warn("Miner extra data exceed limit", "extra", hexutil.Bytes(extra), "limit", vars.MaximumExtraDataSize)
+	maxLen := params.MaxExtraDataSizeForChain(chainConfig)
+	if uint64(len(extra)) > maxLen {
+		log.Warn("Miner extra data exceed limit", "extra", hexutil.Bytes(extra), "limit", maxLen)
 		extra = nil
 	}
 	return extra

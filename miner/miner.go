@@ -34,6 +34,7 @@ import (
 	"github.com/ethereum/go-ethereum/eth/fetcher"
 	"github.com/ethereum/go-ethereum/event"
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/params/types/ctypes"
 	"github.com/ethereum/go-ethereum/params/vars"
 )
@@ -73,26 +74,28 @@ var DefaultConfig = Config{
 
 // Miner creates blocks and searches for proof-of-work values.
 type Miner struct {
-	mux     *event.TypeMux
-	eth     Backend
-	engine  consensus.Engine
-	exitCh  chan struct{}
-	startCh chan struct{}
-	stopCh  chan struct{}
-	worker  *worker
+	mux         *event.TypeMux
+	eth         Backend
+	engine      consensus.Engine
+	chainConfig ctypes.ChainConfigurator
+	exitCh      chan struct{}
+	startCh     chan struct{}
+	stopCh      chan struct{}
+	worker      *worker
 
 	wg sync.WaitGroup
 }
 
 func New(eth Backend, config *Config, chainConfig ctypes.ChainConfigurator, mux *event.TypeMux, engine consensus.Engine, isLocalBlock func(header *types.Header) bool) *Miner {
 	miner := &Miner{
-		mux:     mux,
-		eth:     eth,
-		engine:  engine,
-		exitCh:  make(chan struct{}),
-		startCh: make(chan struct{}),
-		stopCh:  make(chan struct{}),
-		worker:  newWorker(config, chainConfig, engine, eth, mux, isLocalBlock, true),
+		mux:         mux,
+		eth:         eth,
+		engine:      engine,
+		chainConfig: chainConfig,
+		exitCh:      make(chan struct{}),
+		startCh:     make(chan struct{}),
+		stopCh:      make(chan struct{}),
+		worker:      newWorker(config, chainConfig, engine, eth, mux, isLocalBlock, true),
 	}
 	miner.wg.Add(1)
 	go miner.update()
@@ -196,8 +199,9 @@ func (miner *Miner) Hashrate() uint64 {
 }
 
 func (miner *Miner) SetExtra(extra []byte) error {
-	if uint64(len(extra)) > vars.MaximumExtraDataSize {
-		return fmt.Errorf("extra exceeds max length. %d > %v", len(extra), vars.MaximumExtraDataSize)
+	maxLen := params.MaxExtraDataSizeForChain(miner.chainConfig)
+	if uint64(len(extra)) > maxLen {
+		return fmt.Errorf("extra exceeds max length. %d > %v", len(extra), maxLen)
 	}
 	miner.worker.setExtra(extra)
 	return nil
