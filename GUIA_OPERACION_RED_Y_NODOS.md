@@ -37,6 +37,10 @@ Antes de iniciar cualquier proceso, se verificó el estado del entorno:
 | **Minería Remota** | **Deshabilitada** | `eth_getWork` y `eth_submitWork` bloqueados contra rigs/pools |
 | **Gamificación On-Chain**| 7 Rangos Cyberpunk | Contrato `RogueMinerReputation` en Bloque 0 (`0x00...0020`), consulta vía `eth_call` / `STATICCALL` |
 
+> **Nota operacional (Infraestructura y RPC Público):**
+> - **Finalidad estricta (`--ecbp1100.nodisable`):** Por seguridad frente a particiones, `ECBP-1100 (MESS)` se desactiva automáticamente si el nodo tiene menos de `3` peers o pasa más de `15 minutos` sin nuevos bloques. En nodos críticos (exploradores, exchanges, infraestructura propia) con red estabilizada, se recomienda añadir `--ecbp1100.nodisable`.
+> - **Protección RPC por defecto:** El servidor HTTP/WS aplica por defecto `--http.maxconnsperip=100`, `--http.rpslimit=50`, `--http.rpsburst=150`, `BatchRequestLimit=100` y `--rpc.getlogs.maxrange=10000` (eximiendo `127.0.0.1`/`::1` salvo detrás de `--http.trustedproxies`).
+
 ---
 
 ## 🛠️ 3. Ubicación y Verificación de Binarios Compilados
