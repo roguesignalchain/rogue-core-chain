@@ -98,7 +98,7 @@ To enforce egalitarian in-node solo CPU mining and prevent external Stratum prox
 | `--http.maxconnsperip` | `100` | Maximum concurrent HTTP/WebSocket requests per client IP (`0` disables). Exceeding returns `HTTP 429` with `Retry-After: 1` |
 | `--http.trustedproxies` | `""` (empty, fail-closed) | Comma-separated trusted proxy IPs or CIDRs for extracting the real client IP via Rightmost Untrusted IP in `X-Forwarded-For` / `X-Real-IP` |
 | `--miner.threads` | `-1` (disabled until started) | Number of CPU threads for internal RandomX mining |
-| `--miner.etherbase` | `RogueTreasuryAddress` fallback | Coinbase address receiving 95% block rewards + 100% tx fees + gamification XP |
+| `--miner.etherbase` | Required when mining | Coinbase address receiving 95% block rewards + 100% tx fees + gamification XP |
 | `--miner.recommit` | `10s` | Interval to recreate sealing work |
 | `--miner.gaslimit` / `GasCeil` | `50000000` | Target block gas ceiling aligned with Genesis `GasLimit` |
 

@@ -54,7 +54,7 @@ Core-Rogue ajusta el pipeline del minero específicamente para bloques RandomX c
 - **Valores por Defecto Alineados (`miner.DefaultConfig`)**:
   - `GasCeil = 50,000,000` (alineado con `DefaultRogueGenesisBlock().GasLimit` y `RPCGasCap`).
   - `Recommit = 10 * time.Second` (ajustado al tiempo de bloque de 30s frente a los 2s agresivos de upstream).
-- **Fallback No Bloqueante de Etherbase**: Si `--miner.etherbase` no está configurado (`0x0`), `worker.etherbase()` usa `params.RogueTreasuryAddress` con una única advertencia en log, permitiendo iniciar el minado sin fricción.
+- **Exigencia Explícita de Etherbase**: Si `--miner.etherbase` no está configurado (`0x0`), `StartMining` y `worker.commitWork` rechazan el inicio/sellado explícitamente para evitar que un operador mine recompensas hacia una dirección no deseada.
 - **Aborto Inmediato y Reinicio de Hashrate**: Detener el minero (`SetThreads(<= 0)`) cancela el sellado activo al instante, reinicia el rastreador EMA de hashrate (`tracker.Reset()`) y purga las VMs inactivas (`PurgeAllVMs()`).
 
 ---

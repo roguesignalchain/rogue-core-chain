@@ -54,7 +54,7 @@ Core-Rogue tunes the upstream miner pipeline specifically for a 30-second Random
 - **Aligned Defaults (`miner.DefaultConfig`)**:
   - `GasCeil = 50,000,000` (aligned with `DefaultRogueGenesisBlock().GasLimit` and `RPCGasCap`).
   - `Recommit = 10 * time.Second` (tuned for 30s block time instead of upstream's aggressive 2s).
-- **Non-Spam Etherbase Fallback**: If `--miner.etherbase` is unset (`0x0`), `worker.etherbase()` falls back to `params.RogueTreasuryAddress` with a single logged warning, allowing frictionless mining startup without failing block assembly.
+- **Explicit Etherbase Enforcement**: If `--miner.etherbase` is unset (`0x0`), `StartMining` and `worker.commitWork` fail/refuse block assembly explicitly so operators never spend CPU sealing rewards to an unintended address.
 - **Immediate Abort & Hashrate Reset**: Stopping the miner (`SetThreads(<= 0)`) immediately cancels active sealing, resets the EMA hashrate tracker (`tracker.Reset()`), and purges idle RandomX VMs (`PurgeAllVMs()`).
 
 ---

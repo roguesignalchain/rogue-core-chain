@@ -54,7 +54,7 @@ Core-Rogue 针对 30 秒 RandomX PoW 节奏专门调优了上游矿工流水线�
 - **对齐的默认配置 (`miner.DefaultConfig`)**：
   - `GasCeil = 50,000,000`（与 `DefaultRogueGenesisBlock().GasLimit` 和 `RPCGasCap` 保持一致）。
   - `Recommit = 10 * time.Second`（针对 30 秒出块间隔调优，替代上游激进的 2 秒间隔）。
-- **无感 Etherbase 回退**：若未配置 `--miner.etherbase`（`0x0`），`worker.etherbase()` 会自动回退到 `params.RogueTreasuryAddress` 并仅打印一次警告日志，实现零阻力启动挖矿。
+- **显式 Etherbase 校验**：若未配置 `--miner.etherbase`（`0x0`），`StartMining` 与 `worker.commitWork` 会明确拒绝启动或出块，避免算力在无意中将奖励路由到非预期地址。
 - **即时中止与算力清零**：停止挖矿（`SetThreads(<= 0)`）会立即取消当前封印、重置 EMA 算力追踪器（`tracker.Reset()`）并清理空闲 RandomX VM（`PurgeAllVMs()`）。
 
 ---

@@ -182,7 +182,7 @@ $$\text{Reward} = \left\lfloor \frac{25 \times 10^{18}}{2^{\text{Era}}} \right\r
 - **`miner/worker.go` & `miner/miner.go`**:
   - Suppresses preliminary empty block commit when TxPool is empty, avoiding CPU interruptions on RandomX.
   - Atomically deduplicates sealing tasks by `sealhash` per block head.
-  - Falls back to `params.RogueTreasuryAddress` with a single non-spam warning when `--miner.etherbase` is unset (`0x0`), allowing zero-friction mining startup.
+  - Requires an explicit `--miner.etherbase` address when starting mining (`Ethereum.StartMining` and `worker.commitWork` refuse zero coinbase addresses so rewards are never silently misrouted).
   - Default `miner.recommit` set to 10 seconds.
 - **`eth/ethconfig/config.go`**:
   - Added `RandomXFast bool` configuration flag.

@@ -98,7 +98,7 @@ curl -s -X POST http://127.0.0.1:38845 \
 | `--http.maxconnsperip` | `100` | 每个客户端 IP 允许的最大并发 HTTP/WebSocket 请求数（`0` 表示禁用）。超限返回 `HTTP 429` 及 `Retry-After: 1` |
 | `--http.trustedproxies` | `""`（空，fail-closed） | 逗号分隔的受信任代理 IP 或 CIDR，用于从 `X-Forwarded-For` / `X-Real-IP` 中以 Rightmost Untrusted IP 提取真实客户端 IP |
 | `--miner.threads` | `-1`（启动前禁用） | 内置 RandomX CPU 挖矿线程数 |
-| `--miner.etherbase` | 回退至 `RogueTreasuryAddress` | 接收 95% 区块奖励 + 100% 交易手续费 + 游戏化 XP 的 Coinbase 地址 |
+| `--miner.etherbase` | 挖矿时必填 | 接收 95% 区块奖励 + 100% 交易手续费 + 游戏化 XP 的 Coinbase 地址 |
 | `--miner.recommit` | `10s` | 重新生成封印任务的时间间隔 |
 | `--miner.gaslimit` / `GasCeil` | `50000000` | 与创世块 `GasLimit` 对齐的目标区块 Gas 上限 |
 

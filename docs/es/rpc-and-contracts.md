@@ -98,7 +98,7 @@ Para garantizar una minería CPU solitaria e igualitaria dentro del nodo e imped
 | `--http.maxconnsperip` | `100` | Máximo de solicitudes concurrentes HTTP/WebSocket por IP cliente (`0` desactiva). Al excederlo devuelve `HTTP 429` con `Retry-After: 1` |
 | `--http.trustedproxies` | `""` (vacío, fail-closed) | IPs o CIDRs de proxies confiables separados por coma para extraer la IP real vía Rightmost Untrusted IP en `X-Forwarded-For` / `X-Real-IP` |
 | `--miner.threads` | `-1` (deshabilitado hasta iniciar) | Número de hilos CPU para el minero interno RandomX |
-| `--miner.etherbase` | Fallback a `RogueTreasuryAddress` | Dirección coinbase que recibe el 95% de recompensa + 100% de fees + XP de gamificación |
+| `--miner.etherbase` | Obligatorio al minar | Dirección coinbase que recibe el 95% de recompensa + 100% de fees + XP de gamificación |
 | `--miner.recommit` | `10s` | Intervalo para recrear el trabajo de sellado |
 | `--miner.gaslimit` / `GasCeil` | `50000000` | Techo de gas por bloque alineado con `GasLimit` del Génesis |
 
