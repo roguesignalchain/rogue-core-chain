@@ -1,8 +1,10 @@
 package randomx
 
 import (
+	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus"
@@ -72,6 +74,8 @@ type EpochManager struct {
 
 	// allocSem limits concurrent CGo dataset/cache initializations to prevent memory exhaustion DoS.
 	allocSem chan struct{}
+
+	closed atomic.Bool
 }
 
 // NewEpochManager creates a new epoch coordinator.
@@ -198,7 +202,7 @@ func (em *EpochManager) ResolveSeedForHeader(header *types.Header, chain consens
 		em.mu.RUnlock()
 		return cached, nil
 	}
-	if blockNum-1 > seedNum {
+	if blockNum > 0 && blockNum-1 > seedNum && EpochNumber(blockNum-1) == epoch {
 		if parentSeed, ok := em.resolvedSeeds[header.ParentHash]; ok {
 			em.mu.RUnlock()
 			em.cacheResolvedSeed(headerHash, parentSeed)
@@ -211,7 +215,7 @@ func (em *EpochManager) ResolveSeedForHeader(header *types.Header, chain consens
 		return em.GetSeed(epoch, chain)
 	}
 
-	// Walk parent hashes back to seedNum (short-circuiting on any cached ancestor in the same epoch)
+	// Walk parent hashes back to seedNum (short-circuiting only on cached ancestors in the same epoch)
 	if blockNum > seedNum {
 		currHash := header.ParentHash
 		currNum := blockNum - 1
@@ -225,13 +229,15 @@ func (em *EpochManager) ResolveSeedForHeader(header *types.Header, chain consens
 				em.cacheResolvedSeed(headerHash, seed)
 				return seed, nil
 			}
-			em.mu.RLock()
-			if cached, ok := em.resolvedSeeds[currHash]; ok {
+			if EpochNumber(currNum) == epoch {
+				em.mu.RLock()
+				if cached, ok := em.resolvedSeeds[currHash]; ok {
+					em.mu.RUnlock()
+					em.cacheResolvedSeed(headerHash, cached)
+					return cached, nil
+				}
 				em.mu.RUnlock()
-				em.cacheResolvedSeed(headerHash, cached)
-				return cached, nil
 			}
-			em.mu.RUnlock()
 
 			curr := chain.GetHeader(currHash, currNum)
 			if curr == nil {
@@ -357,6 +363,10 @@ func (em *EpochManager) getContextBySeedWithMode(epoch uint64, seed common.Hash,
 		em.mu.RUnlock()
 
 		em.mu.Lock()
+		if em.closed.Load() {
+			em.mu.Unlock()
+			return nil, errors.New("epoch manager is closed")
+		}
 		if ctx := em.lookupCachedContextLocked(seed, targetFast); ctx != nil {
 			em.mu.Unlock()
 			return ctx, nil
@@ -387,6 +397,15 @@ func (em *EpochManager) getContextBySeedWithMode(epoch uint64, seed common.Hash,
 
 		em.mu.Lock()
 		delete(em.inflight, key)
+		if em.closed.Load() {
+			if newCtx != nil {
+				newCtx.Close()
+			}
+			initCall.err = errors.New("epoch manager is closed")
+			close(initCall.done)
+			em.mu.Unlock()
+			return nil, initCall.err
+		}
 		if err != nil {
 			initCall.err = fmt.Errorf("failed to create RxContext for epoch %d: %w", epoch, err)
 			close(initCall.done)
@@ -467,7 +486,7 @@ func (em *EpochManager) getContextBySeedWithMode(epoch uint64, seed common.Hash,
 // PrecomputeNextEpoch initiates background initialization of the upcoming epoch cache
 // once blockNum enters the SeedLag window (e.g. block 2048 - 64 = 1984).
 func (em *EpochManager) PrecomputeNextEpoch(blockNum uint64, chain consensus.ChainHeaderReader) {
-	if chain == nil {
+	if chain == nil || em.closed.Load() {
 		return
 	}
 	epoch := EpochNumber(blockNum)
@@ -493,7 +512,14 @@ func (em *EpochManager) PrecomputeNextEpoch(blockNum uint64, chain consensus.Cha
 		}
 
 		go func() {
+			if em.closed.Load() {
+				return
+			}
 			em.mu.Lock()
+			if em.closed.Load() {
+				em.mu.Unlock()
+				return
+			}
 			em.epochSeeds[nextEpoch] = seed
 			em.mu.Unlock()
 
@@ -568,6 +594,7 @@ func (em *EpochManager) LargePages() bool {
 
 // Close frees all active RandomX contexts.
 func (em *EpochManager) Close() {
+	em.closed.Store(true)
 	em.mu.Lock()
 	defer em.mu.Unlock()
 

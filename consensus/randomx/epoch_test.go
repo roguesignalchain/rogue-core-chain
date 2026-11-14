@@ -542,3 +542,66 @@ func TestAcquireVMConcurrentClose(t *testing.T) {
 		t.Fatal("expected AcquireVM on closed context to return an error")
 	}
 }
+
+func TestResolveSeedAcrossEpochBoundary4096(t *testing.T) {
+	chain := NewFakeChainReader()
+	parentHash := common.Hash{}
+	var seedEpoch1, seedEpoch2 common.Hash
+	var h4094, h4095, h4096, h4097 *types.Header
+
+	for num := uint64(0); num <= 4097; num++ {
+		h := &types.Header{
+			ParentHash: parentHash,
+			Number:     big.NewInt(int64(num)),
+			Time:       1700000000 + num*30,
+			Difficulty: big.NewInt(0x10000),
+		}
+		chain.AddHeader(h)
+		parentHash = h.Hash()
+		switch num {
+		case SeedBlockNumber(1): // 1984
+			seedEpoch1 = parentHash
+		case SeedBlockNumber(2): // 4032
+			seedEpoch2 = parentHash
+		case 4094:
+			h4094 = h
+		case 4095:
+			h4095 = h
+		case 4096:
+			h4096 = h
+		case 4097:
+			h4097 = h
+		}
+	}
+
+	em := NewEpochManager(false)
+	defer em.Close()
+
+	// Populate resolvedSeeds with Epoch 1 blocks (4094, 4095) before crossing into Epoch 2 (4096).
+	for _, h := range []*types.Header{h4094, h4095} {
+		got, err := em.ResolveSeedForHeader(h, chain)
+		if err != nil {
+			t.Fatalf("ResolveSeedForHeader(%d) failed: %v", h.Number.Uint64(), err)
+		}
+		if got != seedEpoch1 {
+			t.Fatalf("block %d seed mismatch: got %s, want epoch 1 seed %s", h.Number.Uint64(), got.Hex(), seedEpoch1.Hex())
+		}
+	}
+
+	// Block 4096 starts Epoch 2 and must resolve to block 4032, never inheriting Epoch 1's cached seed from 4095/4094.
+	got4096, err := em.ResolveSeedForHeader(h4096, chain)
+	if err != nil {
+		t.Fatalf("ResolveSeedForHeader(4096) failed: %v", err)
+	}
+	if got4096 != seedEpoch2 {
+		t.Fatalf("block 4096 seed mismatch: got %s, want epoch 2 seed %s", got4096.Hex(), seedEpoch2.Hex())
+	}
+
+	got4097, err := em.ResolveSeedForHeader(h4097, chain)
+	if err != nil {
+		t.Fatalf("ResolveSeedForHeader(4097) failed: %v", err)
+	}
+	if got4097 != seedEpoch2 {
+		t.Fatalf("block 4097 seed mismatch: got %s, want epoch 2 seed %s", got4097.Hex(), seedEpoch2.Hex())
+	}
+}
