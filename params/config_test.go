@@ -392,3 +392,11 @@ func TestResolveRandomXTreasury(t *testing.T) {
 		t.Fatalf("expected custom treasury %s for goethereum.ChainConfig, got %s", customAddr.Hex(), got.Hex())
 	}
 }
+
+func TestRogueStrictMonotonicTimestampActiveFromGenesis(t *testing.T) {
+	for _, block := range []*big.Int{big.NewInt(0), big.NewInt(1), big.NewInt(1000)} {
+		if !IsStrictMonotonicTimestamp(RogueChainConfig, block) {
+			t.Fatalf("expected IsStrictMonotonicTimestamp(RogueChainConfig, %s) to be true", block)
+		}
+	}
+}

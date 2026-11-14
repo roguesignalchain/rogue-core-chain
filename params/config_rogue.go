@@ -23,8 +23,9 @@ var (
 		ChainID:                   big.NewInt(800055),
 		SupportedProtocolVersions: vars.DefaultProtocolVersions,
 		RandomX: &ctypes.RandomXConfig{
-			FastMode: false,
-			Treasury: RogueTreasuryAddress,
+			FastMode:             false,
+			Treasury:             RogueTreasuryAddress,
+			StrictMonotonicBlock: big.NewInt(0),
 		},
 
 		// Base protocol rules (Homestead, Tangerine, Spurious Dragon)

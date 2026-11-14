@@ -178,9 +178,6 @@ func makeFullNode(ctx *cli.Context) (*node.Node, ethapi.Backend) {
 	if ctx.IsSet(utils.ECBP1100NoDisableFlag.Name) {
 		enable := ctx.Bool(utils.ECBP1100NoDisableFlag.Name)
 		cfg.Eth.ECBP1100NoDisable = &enable
-	} else if utils.IsRogueNetwork(ctx) {
-		enable := true
-		cfg.Eth.ECBP1100NoDisable = &enable
 	}
 	if ctx.IsSet(utils.OverrideECBP1100DeactivateFlag.Name) {
 		if n := ctx.Uint64(utils.OverrideECBP1100DeactivateFlag.Name); n != math.MaxUint64 {

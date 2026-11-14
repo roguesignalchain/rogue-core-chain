@@ -142,7 +142,7 @@ func ecbp1100(commonAncestor, current, proposed *types.Header, getTDFunc func(co
 			errReorgFinality,
 			common.PrettyAge(time.Unix(int64(commonAncestor.Time), 0)),
 			common.PrettyDuration(time.Duration(timeDelta)*time.Second),
-			common.PrettyDuration(time.Duration(int32(xBig.Uint64()))*time.Second),
+			common.PrettyDuration(time.Duration(timeDelta)*time.Second),
 			prettyRatio,
 			commonAncestor.Number.Uint64(), commonAncestor.Hash().Hex(),
 			current.Number.Uint64(), current.Hash().Hex(),
