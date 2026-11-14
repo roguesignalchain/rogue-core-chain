@@ -29,7 +29,7 @@ const (
 
 	// MaxCachedHistoricalLight is the maximum number of historical Light Mode (~256MB each) contexts
 	// cached separately so old-epoch sync/peer headers never evict active 2.08GB FastDataset contexts.
-	MaxCachedHistoricalLight = 2
+	MaxCachedHistoricalLight = 4
 
 	// MaxResolvedSeedCache is the capacity of the O(1) header-to-seed LRU cache (~160KB RAM, covers 2 full epochs).
 	MaxResolvedSeedCache = 4096
@@ -48,8 +48,9 @@ type seedInit struct {
 
 // EpochManager coordinates RandomX cache/dataset lifecycle across epochs with precomputation and reorg/fork support.
 type EpochManager struct {
-	fastMode bool
-	mu       sync.RWMutex
+	fastMode     bool
+	minVMPoolCap int
+	mu           sync.RWMutex
 
 	// contexts caches RxContext by 32-byte seed hash so competing forks at epoch boundaries do not thrash each other.
 	contexts map[common.Hash]*RxContext
@@ -102,6 +103,15 @@ func (em *EpochManager) SetFastMode(fastMode bool) {
 		return
 	}
 	em.fastMode = fastMode
+}
+
+// SetMinVMPoolCap updates the minimum VM pool capacity for newly allocated contexts.
+func (em *EpochManager) SetMinVMPoolCap(poolCap int) {
+	em.mu.Lock()
+	defer em.mu.Unlock()
+	if poolCap > 0 {
+		em.minVMPoolCap = poolCap
+	}
 }
 
 // IsFastMode returns true if Fast Mode (~2.08GB dataset) is enabled.
@@ -160,9 +170,7 @@ func (em *EpochManager) GetSeed(epoch uint64, chain consensus.ChainHeaderReader)
 	return headerHash, nil
 }
 
-func (em *EpochManager) cacheResolvedSeed(headerHash, seed common.Hash) {
-	em.mu.Lock()
-	defer em.mu.Unlock()
+func (em *EpochManager) cacheResolvedSeedLocked(headerHash, seed common.Hash) {
 	if _, exists := em.resolvedSeeds[headerHash]; exists {
 		return
 	}
@@ -175,8 +183,22 @@ func (em *EpochManager) cacheResolvedSeed(headerHash, seed common.Hash) {
 	em.resolvedOrder = append(em.resolvedOrder, headerHash)
 }
 
+func (em *EpochManager) cacheResolvedSeed(headerHash, seed common.Hash) {
+	em.mu.Lock()
+	em.cacheResolvedSeedLocked(headerHash, seed)
+	em.mu.Unlock()
+}
+
+func (em *EpochManager) cacheResolvedSeeds(seed common.Hash, hashes ...common.Hash) {
+	em.mu.Lock()
+	for _, h := range hashes {
+		em.cacheResolvedSeedLocked(h, seed)
+	}
+	em.mu.Unlock()
+}
+
 // ResolveSeedForHeader resolves the exact RandomX seed hash for a specific header by following
-// its ancestor chain back to SeedBlockNumber(epoch). Uses an O(1) bounded cache (~4KB RAM)
+// its ancestor chain back to SeedBlockNumber(epoch). Uses an O(1) bounded cache (~160KB RAM)
 // to avoid repeated parent walks on consecutive or side-fork blocks.
 func (em *EpochManager) ResolveSeedForHeader(header *types.Header, chain consensus.ChainHeaderReader) (common.Hash, error) {
 	if header == nil || header.Number == nil || !header.Number.IsUint64() {
@@ -215,10 +237,14 @@ func (em *EpochManager) ResolveSeedForHeader(header *types.Header, chain consens
 		return em.GetSeed(epoch, chain)
 	}
 
-	// Walk parent hashes back to seedNum (short-circuiting only on cached ancestors in the same epoch)
+	// Walk parent hashes back to seedNum, recording same-epoch ancestors for batch caching
+	// and periodically checking resolvedSeeds to short-circuit without per-step lock contention.
 	if blockNum > seedNum {
 		currHash := header.ParentHash
 		currNum := blockNum - 1
+		walked := make([]common.Hash, 0, 16)
+		walked = append(walked, headerHash)
+
 		for currNum >= seedNum {
 			if currNum == seedNum {
 				curr := chain.GetHeader(currHash, currNum)
@@ -226,22 +252,25 @@ func (em *EpochManager) ResolveSeedForHeader(header *types.Header, chain consens
 					break
 				}
 				seed := curr.Hash()
-				em.cacheResolvedSeed(headerHash, seed)
+				em.cacheResolvedSeeds(seed, walked...)
 				return seed, nil
 			}
-			if EpochNumber(currNum) == epoch {
+			if EpochNumber(currNum) == epoch && len(walked)%16 == 0 {
 				em.mu.RLock()
-				if cached, ok := em.resolvedSeeds[currHash]; ok {
-					em.mu.RUnlock()
-					em.cacheResolvedSeed(headerHash, cached)
+				cached, ok := em.resolvedSeeds[currHash]
+				em.mu.RUnlock()
+				if ok {
+					em.cacheResolvedSeeds(cached, walked...)
 					return cached, nil
 				}
-				em.mu.RUnlock()
 			}
 
 			curr := chain.GetHeader(currHash, currNum)
 			if curr == nil {
 				break
+			}
+			if EpochNumber(currNum) == epoch {
+				walked = append(walked, currHash)
 			}
 			if currNum == 0 {
 				break
@@ -276,6 +305,14 @@ func (em *EpochManager) GetLightContextForHeader(header *types.Header, chain con
 	return em.getContextForHeaderMode(header, chain, false, true)
 }
 
+// GetVerifyContextForHeader returns an execution context for single-block PoW verification.
+// If an active FastDataset or LightCache for the header's seed is already cached, it is reused
+// with zero allocations; otherwise, only a Light Mode (~256MB) context is initialized so
+// unverified side-fork headers can never trigger 2.08GB FastDataset allocations or evict mining epochs.
+func (em *EpochManager) GetVerifyContextForHeader(header *types.Header, chain consensus.ChainHeaderReader) (*RxContext, error) {
+	return em.getContextForHeaderMode(header, chain, false, true)
+}
+
 func (em *EpochManager) getContextForHeaderMode(header *types.Header, chain consensus.ChainHeaderReader, fastMode, historical bool) (*RxContext, error) {
 	if header == nil || header.Number == nil || !header.Number.IsUint64() {
 		return nil, consensus.ErrInvalidNumber
@@ -294,16 +331,36 @@ func (em *EpochManager) getContextBySeed(epoch uint64, seed common.Hash, targetF
 
 // lookupCachedContextLocked returns an active reference to an existing cached context matching targetFast
 // across primary contexts and (for Light queries) the bounded historicalLight cache. Caller must hold mu.
-func (em *EpochManager) lookupCachedContextLocked(seed common.Hash, targetFast bool) *RxContext {
-	if ctx, exists := em.contexts[seed]; exists && ctx != nil && (ctx.fastMode == targetFast || (!targetFast && ctx.fastMode)) && ctx.IncRef() {
-		return ctx
+func (em *EpochManager) lookupCachedContextLocked(seed common.Hash, targetFast bool) (ctx *RxContext, fromHistorical bool) {
+	if c, exists := em.contexts[seed]; exists && c != nil && (c.fastMode == targetFast || (!targetFast && c.fastMode)) && c.IncRef() {
+		return c, false
 	}
 	if !targetFast {
-		if ctx, exists := em.historicalLight[seed]; exists && ctx != nil && ctx.IncRef() {
-			return ctx
+		if c, exists := em.historicalLight[seed]; exists && c != nil && c.IncRef() {
+			needsPromote := len(em.historicalOrder) > 1 && em.historicalOrder[len(em.historicalOrder)-1] != seed
+			return c, needsPromote
 		}
 	}
-	return nil
+	return nil, false
+}
+
+// promoteHistoricalLightLocked moves seed to the most-recently-used position in historicalOrder.
+// Caller must hold mu.Lock().
+func (em *EpochManager) promoteHistoricalLightLocked(seed common.Hash) {
+	if _, exists := em.historicalLight[seed]; !exists {
+		return
+	}
+	n := len(em.historicalOrder)
+	if n <= 1 || em.historicalOrder[n-1] == seed {
+		return
+	}
+	for i, s := range em.historicalOrder {
+		if s == seed {
+			em.historicalOrder = append(em.historicalOrder[:i], em.historicalOrder[i+1:]...)
+			em.historicalOrder = append(em.historicalOrder, seed)
+			return
+		}
+	}
 }
 
 // removeHistoricalLightLocked deletes seed from the historical Light cache and evicts/closes it if present.
@@ -356,18 +413,27 @@ func (em *EpochManager) storeHistoricalLightLocked(seed common.Hash, newCtx *RxC
 func (em *EpochManager) getContextBySeedWithMode(epoch uint64, seed common.Hash, targetFast, historical bool) (*RxContext, error) {
 	for {
 		em.mu.RLock()
-		if ctx := em.lookupCachedContextLocked(seed, targetFast); ctx != nil {
-			em.mu.RUnlock()
+		ctx, needsPromote := em.lookupCachedContextLocked(seed, targetFast)
+		minPoolCap := em.minVMPoolCap
+		em.mu.RUnlock()
+		if ctx != nil {
+			if needsPromote {
+				em.mu.Lock()
+				em.promoteHistoricalLightLocked(seed)
+				em.mu.Unlock()
+			}
 			return ctx, nil
 		}
-		em.mu.RUnlock()
 
 		em.mu.Lock()
 		if em.closed.Load() {
 			em.mu.Unlock()
 			return nil, errors.New("epoch manager is closed")
 		}
-		if ctx := em.lookupCachedContextLocked(seed, targetFast); ctx != nil {
+		if ctx, needsPromote := em.lookupCachedContextLocked(seed, targetFast); ctx != nil {
+			if needsPromote {
+				em.promoteHistoricalLightLocked(seed)
+			}
 			em.mu.Unlock()
 			return ctx, nil
 		}
@@ -392,7 +458,7 @@ func (em *EpochManager) getContextBySeedWithMode(epoch uint64, seed common.Hash,
 		// Allocate RandomX cache/dataset outside the lock so concurrent RPCs and verifications never block.
 		// allocSem bounds concurrent allocations to prevent RAM exhaustion spikes.
 		em.allocSem <- struct{}{}
-		newCtx, err := NewRxContext(seed.Bytes(), targetFast)
+		newCtx, err := NewRxContextWithPoolCap(seed.Bytes(), targetFast, minPoolCap)
 		<-em.allocSem
 
 		em.mu.Lock()

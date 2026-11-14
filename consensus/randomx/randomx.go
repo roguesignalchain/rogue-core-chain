@@ -153,11 +153,16 @@ func New(cfg Config) *RandomX {
 		treasury = DefaultTreasuryAddress
 	}
 
+	epochs := NewEpochManager(cfg.FastMode)
+	if cfg.Threads > 0 {
+		epochs.SetMinVMPoolCap(cfg.Threads)
+	}
+
 	return &RandomX{
 		fastMode: cfg.FastMode,
 		threads:  cfg.Threads,
 		treasury: treasury,
-		epochs:   NewEpochManager(cfg.FastMode),
+		epochs:   epochs,
 		hashrate: metrics.NewMeter(),
 	}
 }
@@ -168,6 +173,9 @@ func (rx *RandomX) SetThreads(threads int) {
 	rx.lock.Lock()
 	rx.threads = threads
 	rx.lock.Unlock()
+	if threads > 0 {
+		rx.epochs.SetMinVMPoolCap(threads)
+	}
 	if threads <= 0 {
 		rx.tracker.Reset()
 		rx.epochs.PurgeAllVMs()
@@ -372,6 +380,22 @@ func (rx *RandomX) VerifyHeaders(chain consensus.ChainHeaderReader, headers []*t
 		}
 		sem := make(chan struct{}, workers)
 
+		var (
+			failedMu     sync.RWMutex
+			failedHashes = make(map[common.Hash]struct{})
+		)
+		markFailed := func(h common.Hash) {
+			failedMu.Lock()
+			failedHashes[h] = struct{}{}
+			failedMu.Unlock()
+		}
+		isFailed := func(h common.Hash) bool {
+			failedMu.RLock()
+			_, ok := failedHashes[h]
+			failedMu.RUnlock()
+			return ok
+		}
+
 		// Producer: run Phase 1 fail-fast checks and dispatch Phase 2 seal checks to worker pool
 		go func() {
 			targetByHash := make(map[common.Hash]*big.Int, n+DefaultLWMAWindow)
@@ -395,6 +419,14 @@ func (rx *RandomX) VerifyHeaders(chain consensus.ChainHeaderReader, headers []*t
 					continue
 				}
 
+				headerHash := header.Hash()
+				if isFailed(header.ParentHash) {
+					errs[i] = fmt.Errorf("%w: invalid ancestor %s", consensus.ErrUnknownAncestor, header.ParentHash.Hex())
+					markFailed(headerHash)
+					close(done[i])
+					continue
+				}
+
 				var parent *types.Header
 				if i > 0 && headers[i-1].Hash() == header.ParentHash {
 					parent = headers[i-1]
@@ -404,6 +436,7 @@ func (rx *RandomX) VerifyHeaders(chain consensus.ChainHeaderReader, headers []*t
 
 				if parent == nil {
 					errs[i] = consensus.ErrUnknownAncestor
+					markFailed(headerHash)
 					close(done[i])
 					continue
 				}
@@ -411,6 +444,7 @@ func (rx *RandomX) VerifyHeaders(chain consensus.ChainHeaderReader, headers []*t
 				// Phase 1: Fast lightweight validation (microseconds)
 				if err := rx.verifyHeaderWithCache(batchReader, header, parent, false, targetByHash); err != nil {
 					errs[i] = err
+					markFailed(headerHash)
 					close(done[i])
 					continue
 				}
@@ -429,7 +463,7 @@ func (rx *RandomX) VerifyHeaders(chain consensus.ChainHeaderReader, headers []*t
 				case sem <- struct{}{}:
 				}
 
-				go func(idx int, h *types.Header) {
+				go func(idx int, h *types.Header, hHash common.Hash) {
 					defer func() {
 						<-sem
 						close(done[idx])
@@ -439,8 +473,16 @@ func (rx *RandomX) VerifyHeaders(chain consensus.ChainHeaderReader, headers []*t
 						return
 					default:
 					}
-					errs[idx] = rx.VerifySeal(batchReader, h)
-				}(i, header)
+					if isFailed(h.ParentHash) {
+						errs[idx] = fmt.Errorf("%w: invalid ancestor %s", consensus.ErrUnknownAncestor, h.ParentHash.Hex())
+						markFailed(hHash)
+						return
+					}
+					if err := rx.VerifySeal(batchReader, h); err != nil {
+						errs[idx] = err
+						markFailed(hHash)
+					}
+				}(i, header, headerHash)
 			}
 		}()
 
@@ -600,25 +642,10 @@ func (rx *RandomX) VerifySeal(chain consensus.ChainHeaderReader, header *types.H
 		return ErrInvalidPoW
 	}
 
-	// Use Light Mode (256MB) when verifying historical-epoch headers on a Fast Mode node
-	// to avoid allocating a 2.08GB dataset or evicting active mining epochs.
-	var (
-		ctx *RxContext
-		err error
-	)
-	useLightForPastEpoch := false
-	if rx.IsFastMode() && chain != nil {
-		if head := chain.CurrentHeader(); head != nil && head.Number != nil && head.Number.IsUint64() {
-			if EpochNumber(number) < EpochNumber(head.Number.Uint64()) {
-				useLightForPastEpoch = true
-			}
-		}
-	}
-	if useLightForPastEpoch {
-		ctx, err = rx.epochs.GetLightContextForHeader(header, chain)
-	} else {
-		ctx, err = rx.epochs.GetContextForHeader(header, chain)
-	}
+	// Reuse any already-cached FastDataset or LightCache for this seed; otherwise allocate
+	// only a ~256MB Light Mode context so unverified side-fork headers cannot trigger 2.08GB
+	// FastDataset allocations or evict active mining epochs.
+	ctx, err := rx.epochs.GetVerifyContextForHeader(header, chain)
 	if err != nil {
 		return fmt.Errorf("failed to get RandomX context for block %d: %w", number, err)
 	}
@@ -639,7 +666,7 @@ func (rx *RandomX) VerifySeal(chain consensus.ChainHeaderReader, header *types.H
 
 	// Precompute next epoch cache/dataset in the background for non-mining validators/RPC nodes
 	// when validating a tip block inside the SeedLag window.
-	if !useLightForPastEpoch && chain != nil {
+	if chain != nil {
 		if head := chain.CurrentHeader(); head != nil && head.Number != nil && head.Number.IsUint64() && number >= head.Number.Uint64() {
 			rx.epochs.PrecomputeNextEpoch(number, chain)
 		}

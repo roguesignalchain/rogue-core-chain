@@ -159,6 +159,12 @@ func (d *FastDataset) Release() {
 // NewRxContext creates an execution context for a given epoch seed.
 // Defaults to Light Mode (256MB) unless fastMode is explicitly true.
 func NewRxContext(seed []byte, fastMode bool) (*RxContext, error) {
+	return NewRxContextWithPoolCap(seed, fastMode, 0)
+}
+
+// NewRxContextWithPoolCap creates an execution context for a given epoch seed with a
+// minimum VM pool capacity to avoid VM churn when mining with more than NumCPU threads.
+func NewRxContextWithPoolCap(seed []byte, fastMode bool, minPoolCap int) (*RxContext, error) {
 	flags := GetRecommendedFlags(fastMode)
 
 	// In Fast Mode, keep HugePages reserved for the 2.08GB FastDataset rather than the temporary 256MB LightCache.
@@ -197,9 +203,12 @@ func NewRxContext(seed []byte, fastMode bool) (*RxContext, error) {
 		log.Info("RandomX context initialized with standard pages (HugePages unavailable)", "mode", mode)
 	}
 
-	poolCap := runtime.NumCPU() + 2
-	if poolCap < 4 {
-		poolCap = 4
+	poolCap := runtime.NumCPU() * 2
+	if poolCap < 16 {
+		poolCap = 16
+	}
+	if minPoolCap > poolCap {
+		poolCap = minPoolCap
 	}
 
 	ctx := &RxContext{

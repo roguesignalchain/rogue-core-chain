@@ -467,6 +467,8 @@ func TestGetLightContextForHeader(t *testing.T) {
 	seedPast1 := common.HexToHash("0x3333333333333333333333333333333333333333333333333333333333333333")
 	seedPast2 := common.HexToHash("0x4444444444444444444444444444444444444444444444444444444444444444")
 	seedPast3 := common.HexToHash("0x5555555555555555555555555555555555555555555555555555555555555555")
+	seedPast4 := common.HexToHash("0x6666666666666666666666666666666666666666666666666666666666666666")
+	seedPast5 := common.HexToHash("0x7777777777777777777777777777777777777777777777777777777777777777")
 	em.mu.Lock()
 	em.contexts[seedA] = &RxContext{fastMode: true, vmPool: make(chan *VM, 1)}
 	em.contextEpochs[seedA] = 10
@@ -474,7 +476,7 @@ func TestGetLightContextForHeader(t *testing.T) {
 	em.contextEpochs[seedB] = 11
 	em.mu.Unlock()
 
-	for _, pastSeed := range []common.Hash{seedPast1, seedPast2, seedPast3} {
+	for _, pastSeed := range []common.Hash{seedPast1, seedPast2, seedPast3, seedPast4} {
 		ctxPast, err := em.getContextBySeed(5, pastSeed, false)
 		if err != nil {
 			t.Fatalf("getContextBySeed(%x) failed: %v", pastSeed[:4], err)
@@ -482,13 +484,27 @@ func TestGetLightContextForHeader(t *testing.T) {
 		ctxPast.DecRef()
 	}
 
+	// Touch seedPast1 so LRU promotes it ahead of seedPast2 before inserting seedPast5.
+	ctxTouch, err := em.getContextBySeed(5, seedPast1, false)
+	if err != nil {
+		t.Fatalf("getContextBySeed(seedPast1) failed: %v", err)
+	}
+	ctxTouch.DecRef()
+
+	ctxPast5, err := em.getContextBySeed(5, seedPast5, false)
+	if err != nil {
+		t.Fatalf("getContextBySeed(seedPast5) failed: %v", err)
+	}
+	ctxPast5.DecRef()
+
 	em.mu.RLock()
 	cachedFastCount := len(em.contexts)
 	_, hasPrevFast := em.contexts[seedA]
 	_, hasCurrentFast := em.contexts[seedB]
 	histCount := len(em.historicalLight)
-	_, hasOldestHist := em.historicalLight[seedPast1]
-	_, hasNewestHist := em.historicalLight[seedPast3]
+	_, hasSeed1 := em.historicalLight[seedPast1]
+	_, hasSeed2 := em.historicalLight[seedPast2]
+	_, hasNewestHist := em.historicalLight[seedPast5]
 	em.mu.RUnlock()
 
 	if cachedFastCount != 2 || !hasPrevFast || !hasCurrentFast {
@@ -497,8 +513,52 @@ func TestGetLightContextForHeader(t *testing.T) {
 	if histCount != MaxCachedHistoricalLight {
 		t.Fatalf("expected historicalLight cache size=%d, got %d", MaxCachedHistoricalLight, histCount)
 	}
-	if hasOldestHist || !hasNewestHist {
-		t.Fatalf("expected FIFO eviction on historicalLight (hasOldest=%v hasNewest=%v)", hasOldestHist, hasNewestHist)
+	if !hasSeed1 || hasSeed2 || !hasNewestHist {
+		t.Fatalf("expected LRU eviction on historicalLight (hasSeed1=%v hasSeed2=%v hasNewest=%v)", hasSeed1, hasSeed2, hasNewestHist)
+	}
+}
+
+func TestGetVerifyContextForHeaderNoFastAlloc(t *testing.T) {
+	em := NewEpochManager(true)
+	defer em.Close()
+
+	seedHeader := &types.Header{
+		Number:     big.NewInt(0),
+		Difficulty: big.NewInt(0x10000),
+		Time:       1000,
+	}
+	chain := NewFakeChainReader()
+	chain.AddHeader(seedHeader)
+
+	tipHeader := &types.Header{
+		Number:     big.NewInt(1),
+		ParentHash: seedHeader.Hash(),
+		Difficulty: big.NewInt(0x10000),
+		Time:       1030,
+	}
+
+	// Even on a FastMode EpochManager, GetVerifyContextForHeader must allocate only Light Mode (~256MB)
+	// when no FastDataset is already cached.
+	ctx, err := em.GetVerifyContextForHeader(tipHeader, chain)
+	if err != nil {
+		t.Fatalf("GetVerifyContextForHeader failed: %v", err)
+	}
+	defer ctx.DecRef()
+
+	if ctx.fastMode {
+		t.Fatal("expected GetVerifyContextForHeader to avoid 2.08GB FastDataset allocation for uncached seed")
+	}
+}
+
+func TestNewRxContextWithPoolCap(t *testing.T) {
+	ctx, err := NewRxContextWithPoolCap([]byte("pool-cap-seed"), false, 64)
+	if err != nil {
+		t.Fatalf("NewRxContextWithPoolCap failed: %v", err)
+	}
+	defer ctx.Close()
+
+	if cap(ctx.vmPool) < 64 {
+		t.Fatalf("expected vmPool cap >= 64, got %d", cap(ctx.vmPool))
 	}
 }
 
