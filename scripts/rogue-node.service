@@ -20,7 +20,7 @@ ExecStart=/usr/local/bin/core-rogue \
     --http \
     --http.addr 127.0.0.1 \
     --http.port 38845 \
-    --http.api eth,net,web3,rogue \
+    --http.api eth,net,web3,randomx \
     --port 38888 \
     --nat any \
     --syncmode full \

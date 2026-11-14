@@ -1234,7 +1234,7 @@ func setBootstrapNodes(ctx *cli.Context, cfg *p2p.Config) {
 			urls = params.ClassicBootnodes
 		case ctx.Bool(MintMeFlag.Name):
 			urls = params.MintMeBootnodes
-		case ctx.Bool(RogueFlag.Name):
+		case isRogueNetwork(ctx):
 			urls = resolveRogueBootnodes()
 		case ctx.Bool(MordorFlag.Name):
 			urls = params.MordorBootnodes
@@ -1245,6 +1245,25 @@ func setBootstrapNodes(ctx *cli.Context, cfg *p2p.Config) {
 		}
 	}
 	cfg.BootstrapNodes = mustParseBootnodes(urls)
+}
+
+// isRogueNetwork returns true when --rogue is explicitly set, or when --networkid 800055
+// is specified without any conflicting explicit chain/developer flag.
+func isRogueNetwork(ctx *cli.Context) bool {
+	if ctx.Bool(RogueFlag.Name) {
+		return true
+	}
+	if ctx.Uint64(NetworkIdFlag.Name) != params.RogueChainConfig.NetworkID {
+		return false
+	}
+	return !ctx.Bool(MainnetFlag.Name) &&
+		!ctx.Bool(ClassicFlag.Name) &&
+		!ctx.Bool(MordorFlag.Name) &&
+		!ctx.Bool(SepoliaFlag.Name) &&
+		!ctx.Bool(MintMeFlag.Name) &&
+		!ctx.Bool(HoleskyFlag.Name) &&
+		!ctx.Bool(DeveloperFlag.Name) &&
+		!ctx.Bool(DeveloperPoWFlag.Name)
 }
 
 // resolveRogueBootnodes returns dynamic bootnodes from ROGUE_BOOTNODES (if set)
@@ -1284,7 +1303,7 @@ func setBootstrapNodesV5(ctx *cli.Context, cfg *p2p.Config) {
 		urls = params.MordorBootnodes
 	case ctx.Bool(MintMeFlag.Name):
 		urls = params.MintMeBootnodes
-	case ctx.Bool(RogueFlag.Name):
+	case isRogueNetwork(ctx):
 		urls = resolveRogueBootnodes()
 	case cfg.BootstrapNodesV5 != nil:
 		return // already set, don't apply defaults.
@@ -1627,7 +1646,7 @@ func SetNodeConfig(ctx *cli.Context, cfg *node.Config) {
 	SetDataDir(ctx, cfg)
 	setSmartCard(ctx, cfg)
 
-	if ctx.Bool(RogueFlag.Name) {
+	if isRogueNetwork(ctx) {
 		if !ctx.IsSet(ListenPortFlag.Name) {
 			cfg.P2P.ListenAddr = ":38888"
 		}
@@ -1636,6 +1655,9 @@ func SetNodeConfig(ctx *cli.Context, cfg *node.Config) {
 		}
 		if !ctx.IsSet(WSPortFlag.Name) {
 			cfg.WSPort = 38846
+		}
+		if !ctx.IsSet(AuthPortFlag.Name) {
+			cfg.AuthPort = 38851
 		}
 	}
 
@@ -1750,7 +1772,7 @@ func dataDirPathForCtxChainConfig(ctx *cli.Context, baseDataDirPath string) stri
 		return filepath.Join(baseDataDirPath, "sepolia")
 	case ctx.Bool(MintMeFlag.Name):
 		return filepath.Join(baseDataDirPath, "mintme")
-	case ctx.Bool(RogueFlag.Name):
+	case isRogueNetwork(ctx):
 		return filepath.Join(baseDataDirPath, "rogue")
 	case ctx.Bool(HoleskyFlag.Name):
 		return filepath.Join(baseDataDirPath, "holesky")
@@ -2047,8 +2069,7 @@ func SetEthConfig(ctx *cli.Context, stack *node.Node, cfg *ethconfig.Config) {
 		cfg.SyncMode = downloader.FullSync // dev sync target forces full sync
 	} else if ctx.IsSet(SyncModeFlag.Name) {
 		cfg.SyncMode = *flags.GlobalTextMarshaler(ctx, SyncModeFlag.Name).(*downloader.SyncMode)
-	} else if ctx.Bool(RogueFlag.Name) ||
-		ctx.Uint64(NetworkIdFlag.Name) == params.RogueChainConfig.NetworkID ||
+	} else if isRogueNetwork(ctx) ||
 		(cfg.Genesis != nil && cfg.Genesis.Config != nil && cfg.Genesis.Config.GetConsensusEngineType() == ctypes.ConsensusEngineT_RandomX) {
 		cfg.SyncMode = downloader.FullSync
 	}
@@ -2580,7 +2601,7 @@ func genesisForCtxChainConfig(ctx *cli.Context) *genesisT.Genesis {
 		genesis = params.DefaultSepoliaGenesisBlock()
 	case ctx.Bool(MintMeFlag.Name):
 		genesis = params.DefaultMintMeGenesisBlock()
-	case ctx.Bool(RogueFlag.Name):
+	case isRogueNetwork(ctx):
 		genesis = params.DefaultRogueGenesisBlock()
 	case ctx.Bool(HoleskyFlag.Name):
 		genesis = params.DefaultHoleskyGenesisBlock()

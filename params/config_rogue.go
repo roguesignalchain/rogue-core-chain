@@ -73,9 +73,10 @@ var (
 		EIP3860FBlock: big.NewInt(0),
 		EIP6049FBlock: big.NewInt(0),
 
-		// Cancun (MCOPY, TSTORE/TLOAD opcodes)
+		// Cancun (MCOPY, TSTORE/TLOAD, EIP-6780 SELFDESTRUCT restriction)
 		EIP5656FBlock: big.NewInt(0),
 		EIP1153FBlock: big.NewInt(0),
+		EIP6780FBlock: big.NewInt(0),
 
 		// ECBP-1100 (MESS - Modified Exponential Subjective Scoring artificial finality)
 		ECBP1100FBlock: big.NewInt(0),

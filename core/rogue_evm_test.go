@@ -186,3 +186,77 @@ func TestRogueMandatoryEIP155BlockProcessing(t *testing.T) {
 		t.Fatalf("expected valid EIP-155 tx to pass consensus execution, got: %v", err)
 	}
 }
+
+// TestRogueEIP6780Selfdestruct verifies that Cancun EIP-6780 is active at block 1 on RogueChainConfig:
+// calling SELFDESTRUCT on a pre-existing contract transfers its balance to the beneficiary
+// without deleting the contract's bytecode.
+func TestRogueEIP6780Selfdestruct(t *testing.T) {
+	cfg := params.RogueChainConfig
+	key, err := crypto.GenerateKey()
+	if err != nil {
+		t.Fatalf("failed to generate key: %v", err)
+	}
+	sender := crypto.PubkeyToAddress(key.PublicKey)
+	contractAddr := common.HexToAddress("0x000000000000000000000000000000000000aa10")
+	beneficiary := common.HexToAddress("0x000000000000000000000000000000000000aa11")
+	coinbase := common.HexToAddress("0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
+
+	// Bytecode: PUSH20 <beneficiary> | SELFDESTRUCT
+	code := make([]byte, 0, 22)
+	code = append(code, 0x73)
+	code = append(code, beneficiary.Bytes()...)
+	code = append(code, 0xff)
+
+	db := state.NewDatabase(rawdb.NewMemoryDatabase())
+	statedb, err := state.New(types.EmptyRootHash, db, nil)
+	if err != nil {
+		t.Fatalf("failed to create statedb: %v", err)
+	}
+	statedb.AddBalance(sender, new(uint256.Int).Mul(uint256.NewInt(10), uint256.NewInt(vars.Ether)))
+	statedb.AddBalance(contractAddr, uint256.NewInt(5000))
+	statedb.SetCode(contractAddr, code)
+
+	// Commit block 0 and reopen StateDB so contractAddr is a pre-existing contract (created=false).
+	root, err := statedb.Commit(0, true)
+	if err != nil {
+		t.Fatalf("block 0 commit failed: %v", err)
+	}
+	statedb, err = state.New(root, db, nil)
+	if err != nil {
+		t.Fatalf("failed to reopen statedb: %v", err)
+	}
+
+	header := &types.Header{
+		Number:     big.NewInt(1),
+		Time:       1700000030,
+		Difficulty: big.NewInt(1),
+		GasLimit:   60_000_000,
+		Coinbase:   coinbase,
+	}
+	tx := types.MustSignNewTx(key, types.LatestSigner(cfg), &types.LegacyTx{
+		Nonce:    0,
+		To:       &contractAddr,
+		Value:    big.NewInt(0),
+		Gas:      100_000,
+		GasPrice: big.NewInt(vars.GWei),
+	})
+	statedb.SetTxContext(tx.Hash(), 0)
+	gp := new(GasPool).AddGas(header.GasLimit)
+	var usedGas uint64
+	if _, err := ApplyTransaction(cfg, nil, &coinbase, gp, statedb, header, tx, &usedGas, vm.Config{}); err != nil {
+		t.Fatalf("SELFDESTRUCT tx failed: %v", err)
+	}
+	if _, err := statedb.Commit(1, true); err != nil {
+		t.Fatalf("Commit failed: %v", err)
+	}
+
+	if got := statedb.GetBalance(beneficiary); got.Cmp(uint256.NewInt(5000)) != 0 {
+		t.Fatalf("expected beneficiary balance 5000, got %v", got)
+	}
+	if got := statedb.GetBalance(contractAddr); !got.IsZero() {
+		t.Fatalf("expected contract balance 0 after SELFDESTRUCT, got %v", got)
+	}
+	if len(statedb.GetCode(contractAddr)) == 0 {
+		t.Fatal("EIP-6780 violation: pre-existing contract bytecode was deleted by SELFDESTRUCT")
+	}
+}

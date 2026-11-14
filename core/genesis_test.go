@@ -464,6 +464,7 @@ func TestRogueChainConfigHardeningEIPs(t *testing.T) {
 		{"EIP6049FBlock", cfg.EIP6049FBlock},
 		{"EIP5656FBlock", cfg.EIP5656FBlock},
 		{"EIP1153FBlock", cfg.EIP1153FBlock},
+		{"EIP6780FBlock", cfg.EIP6780FBlock},
 	}
 	for _, c := range checks {
 		if c.val == nil || c.val.Sign() != 0 {

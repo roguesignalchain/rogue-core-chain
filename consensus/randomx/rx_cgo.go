@@ -318,17 +318,25 @@ func (ctx *RxContext) DecRef() {
 
 // AcquireVM retrieves a pre-warmed VM from the bounded elastic pool, or allocates a temporary
 // VM if all pooled VMs are currently occupied (e.g. concurrent P2P burst validation).
+// It acquires a temporary context reference so Close()/tryRelease() cannot free underlying
+// CGo memory while a VM is being popped or initialized.
 func (ctx *RxContext) AcquireVM() (*VM, error) {
-	ctx.mu.RLock()
-	if ctx.retired {
-		ctx.mu.RUnlock()
+	if !ctx.IncRef() {
 		return nil, errors.New("context is retired")
 	}
-	ctx.mu.RUnlock()
+	defer ctx.DecRef()
 
 	select {
 	case vm := <-ctx.vmPool:
 		if vm != nil && vm.raw != nil {
+			ctx.mu.RLock()
+			retired := ctx.retired
+			ctx.mu.RUnlock()
+			if retired {
+				vm.Destroy()
+				ctx.totalVMs.Add(-1)
+				return nil, errors.New("context is retired")
+			}
 			ctx.activeVMs.Add(1)
 			return vm, nil
 		}
@@ -338,6 +346,13 @@ func (ctx *RxContext) AcquireVM() (*VM, error) {
 	vm := ctx.createVM()
 	if vm == nil {
 		return nil, errors.New("failed to allocate RandomX VM")
+	}
+	ctx.mu.RLock()
+	retired := ctx.retired
+	ctx.mu.RUnlock()
+	if retired {
+		vm.Destroy()
+		return nil, errors.New("context is retired")
 	}
 	ctx.totalVMs.Add(1)
 	ctx.activeVMs.Add(1)

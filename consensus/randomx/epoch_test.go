@@ -2,6 +2,7 @@ package randomx
 
 import (
 	"math/big"
+	"sync"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -498,5 +499,46 @@ func TestGetLightContextForHeader(t *testing.T) {
 	}
 	if hasOldestHist || !hasNewestHist {
 		t.Fatalf("expected FIFO eviction on historicalLight (hasOldest=%v hasNewest=%v)", hasOldestHist, hasNewestHist)
+	}
+}
+
+func TestAcquireVMConcurrentClose(t *testing.T) {
+	ctx, err := NewRxContext([]byte("concurrent-close-seed"), false)
+	if err != nil {
+		t.Fatalf("NewRxContext failed: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			for j := 0; j < 20; j++ {
+				if !ctx.IncRef() {
+					return
+				}
+				vm, err := ctx.AcquireVM()
+				if err == nil && vm != nil {
+					ctx.ReleaseVM(vm)
+				}
+				ctx.DecRef()
+			}
+		}()
+	}
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		<-start
+		ctx.Close()
+	}()
+
+	close(start)
+	wg.Wait()
+
+	if _, err := ctx.AcquireVM(); err == nil {
+		t.Fatal("expected AcquireVM on closed context to return an error")
 	}
 }
