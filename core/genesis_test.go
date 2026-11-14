@@ -505,3 +505,23 @@ func TestRogueMESSNonMonotonicMTP11(t *testing.T) {
 		t.Fatal("expected lower-TD fork to be rejected by MESS")
 	}
 }
+
+func TestRogueGenesisConfigAndStateRecovery(t *testing.T) {
+	cfg := configOrDefault(nil, params.RogueGenesisHash)
+	if cfg == nil || !cfg.GetConsensusEngineType().IsRandomX() {
+		t.Fatalf("expected RandomX chain config for RogueGenesisHash, got %+v", cfg)
+	}
+	if cfg.GetChainID() == nil || cfg.GetChainID().Cmp(params.RogueChainConfig.GetChainID()) != 0 {
+		t.Fatalf("chainID mismatch: got %v, want %v", cfg.GetChainID(), params.RogueChainConfig.GetChainID())
+	}
+
+	db := rawdb.NewMemoryDatabase()
+	tdb := triedb.NewDatabase(db, nil)
+	if err := CommitGenesisState(db, tdb, params.RogueGenesisHash); err != nil {
+		t.Fatalf("CommitGenesisState(RogueGenesisHash) failed: %v", err)
+	}
+	genesisBlock := GenesisToBlock(params.DefaultRogueGenesisBlock(), nil)
+	if !tdb.Initialized(genesisBlock.Root()) {
+		t.Fatalf("expected Rogue genesis state root %s to be committed in triedb", genesisBlock.Root().Hex())
+	}
+}

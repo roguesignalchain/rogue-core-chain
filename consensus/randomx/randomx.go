@@ -201,7 +201,8 @@ func (rx *RandomX) IsFastMode() bool {
 }
 
 // headerChainReader wraps a ChainHeaderReader with an in-memory batch of headers
-// so ancestors within the batch can be resolved before they are committed to the chain database.
+// so ancestors within the batch can be resolved by hash before they are committed
+// to the chain database.
 type headerChainReader struct {
 	consensus.ChainHeaderReader
 	byHash   map[common.Hash]*types.Header
@@ -353,18 +354,15 @@ func (rx *RandomX) VerifyHeaders(chain consensus.ChainHeaderReader, headers []*t
 	}
 
 	byHash := make(map[common.Hash]*types.Header, len(headers))
-	byNumber := make(map[uint64]*types.Header, len(headers))
 	for _, h := range headers {
 		if h == nil || h.Number == nil || !h.Number.IsUint64() {
 			continue
 		}
 		byHash[h.Hash()] = h
-		byNumber[h.Number.Uint64()] = h
 	}
 	batchReader := &headerChainReader{
 		ChainHeaderReader: chain,
 		byHash:            byHash,
-		byNumber:          byNumber,
 	}
 
 	go func() {
@@ -541,7 +539,7 @@ func (rx *RandomX) VerifyHeaders(chain consensus.ChainHeaderReader, headers []*t
 						markFailed(hHash)
 						return
 					}
-					if err := rx.verifySealWithContext(batchReader, h, vctx); err != nil {
+					if err := rx.verifySealWithContext(h, vctx); err != nil {
 						errs[idx] = err
 						markFailed(hHash)
 					}
@@ -550,11 +548,17 @@ func (rx *RandomX) VerifyHeaders(chain consensus.ChainHeaderReader, headers []*t
 		}()
 
 		// Consumer: emit verification results in strict header order
+		batchFailed := false
 		for i := 0; i < n; i++ {
 			select {
 			case <-abort:
 				return
 			case <-done[i]:
+			}
+			if errs[i] != nil {
+				batchFailed = true
+			} else if !batchFailed && i < len(seals) && seals[i] {
+				rx.maybePrecomputeNextEpoch(chain, headers[i])
 			}
 			select {
 			case <-abort:
@@ -718,10 +722,14 @@ func (rx *RandomX) VerifySeal(chain consensus.ChainHeaderReader, header *types.H
 	}
 	defer ctx.DecRef()
 
-	return rx.verifySealWithContext(chain, header, ctx)
+	if err := rx.verifySealWithContext(header, ctx); err != nil {
+		return err
+	}
+	rx.maybePrecomputeNextEpoch(chain, header)
+	return nil
 }
 
-func (rx *RandomX) verifySealWithContext(chain consensus.ChainHeaderReader, header *types.Header, ctx *RxContext) error {
+func (rx *RandomX) verifySealWithContext(header *types.Header, ctx *RxContext) error {
 	sealHash := rx.SealHash(header)
 	input := MiningInput(sealHash, header.Nonce.Uint64())
 
@@ -735,16 +743,20 @@ func (rx *RandomX) verifySealWithContext(chain consensus.ChainHeaderReader, head
 		return ErrInvalidMixDigest
 	}
 
-	// Precompute next epoch cache/dataset in the background for non-mining validators/RPC nodes
-	// when validating a tip block inside the SeedLag window.
-	if chain != nil && header.Number != nil && header.Number.IsUint64() {
-		number := header.Number.Uint64()
-		if head := chain.CurrentHeader(); head != nil && head.Number != nil && head.Number.IsUint64() && number >= head.Number.Uint64() {
-			rx.epochs.PrecomputeNextEpoch(number, chain)
-		}
-	}
-
 	return nil
+}
+
+// maybePrecomputeNextEpoch triggers background initialization of the upcoming epoch
+// cache/dataset using only canonical headers from chain when validating a tip block
+// inside the SeedLag window.
+func (rx *RandomX) maybePrecomputeNextEpoch(chain consensus.ChainHeaderReader, header *types.Header) {
+	if chain == nil || header == nil || header.Number == nil || !header.Number.IsUint64() {
+		return
+	}
+	number := header.Number.Uint64()
+	if head := chain.CurrentHeader(); head != nil && head.Number != nil && head.Number.IsUint64() && number >= head.Number.Uint64() {
+		rx.epochs.PrecomputeNextEpoch(number, chain)
+	}
 }
 
 // Seal implements the consensus.Engine interface, coordinating internal node CPU miner threads.

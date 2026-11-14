@@ -321,6 +321,8 @@ func configOrDefault(g *genesisT.Genesis, ghash common.Hash) ctypes.ChainConfigu
 		return params.SepoliaChainConfig
 	case ghash == params.MintMeGenesisHash:
 		return params.MintMeChainConfig
+	case ghash == params.RogueGenesisHash:
+		return params.RogueChainConfig
 	default:
 		return params.AllEthashProtocolChanges
 	}
@@ -433,6 +435,8 @@ func CommitGenesisState(db ethdb.Database, triedb *triedb.Database, blockhash co
 			genesis = params.DefaultMintMeGenesisBlock()
 		case params.HoleskyGenesisHash:
 			genesis = params.DefaultHoleskyGenesisBlock()
+		case params.RogueGenesisHash:
+			genesis = params.DefaultRogueGenesisBlock()
 		}
 		if genesis != nil {
 			alloc = genesis.Alloc

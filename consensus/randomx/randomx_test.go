@@ -954,3 +954,110 @@ func TestAPISetFastModeRemoved(t *testing.T) {
 		}
 	}
 }
+
+type tipChainReader struct {
+	*FakeChainReader
+	head *types.Header
+}
+
+func (r *tipChainReader) CurrentHeader() *types.Header {
+	return r.head
+}
+
+func TestVerifyHeadersInvalidBatchDoesNotPolluteEpochSeeds(t *testing.T) {
+	baseChain := NewFakeChainReader()
+	now := uint64(time.Now().Unix())
+	baseTime := now - 2000*30
+
+	parent := &types.Header{
+		Number:     big.NewInt(0),
+		Time:       baseTime,
+		Difficulty: new(big.Int).Set(MinDifficulty),
+		GasLimit:   50000000,
+		UncleHash:  types.EmptyUncleHash,
+	}
+	baseChain.AddHeader(parent)
+
+	seedBlock := EpochLength - SeedLag // 1984 (Epoch 1 seed)
+	for i := uint64(1); i < seedBlock; i++ {
+		ts := parent.Time + 30
+		diff, err := CalculateDifficulty(baseChain, ts, parent)
+		if err != nil {
+			t.Fatalf("CalculateDifficulty(%d) failed: %v", i, err)
+		}
+		h := &types.Header{
+			ParentHash: parent.Hash(),
+			Number:     new(big.Int).SetUint64(i),
+			Time:       ts,
+			Difficulty: diff,
+			GasLimit:   50000000,
+			UncleHash:  types.EmptyUncleHash,
+		}
+		baseChain.AddHeader(h)
+		parent = h
+	}
+	chain := &tipChainReader{FakeChainReader: baseChain, head: parent}
+
+	// Build two unverified headers inside the SeedLag window with invalid PoW seals.
+	ts1984 := parent.Time + 30
+	diff1984, err := CalculateDifficulty(chain, ts1984, parent)
+	if err != nil {
+		t.Fatalf("CalculateDifficulty(1984) failed: %v", err)
+	}
+	bad1984 := &types.Header{
+		ParentHash: parent.Hash(),
+		Number:     new(big.Int).SetUint64(seedBlock),
+		Time:       ts1984,
+		Difficulty: diff1984,
+		GasLimit:   50000000,
+		UncleHash:  types.EmptyUncleHash,
+		MixDigest:  common.HexToHash("0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"),
+	}
+
+	tempChain := NewFakeChainReader()
+	tempChain.headers = mapsCloneHeaders(baseChain.headers)
+	tempChain.AddHeader(bad1984)
+
+	ts1985 := bad1984.Time + 30
+	diff1985, err := CalculateDifficulty(tempChain, ts1985, bad1984)
+	if err != nil {
+		t.Fatalf("CalculateDifficulty(1985) failed: %v", err)
+	}
+	bad1985 := &types.Header{
+		ParentHash: bad1984.Hash(),
+		Number:     new(big.Int).SetUint64(seedBlock + 1),
+		Time:       ts1985,
+		Difficulty: diff1985,
+		GasLimit:   50000000,
+		UncleHash:  types.EmptyUncleHash,
+		MixDigest:  common.HexToHash("0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"),
+	}
+
+	rx := New(Config{FastMode: false, Threads: 1})
+	defer rx.Close()
+
+	abort, results := rx.VerifyHeaders(chain, []*types.Header{bad1984, bad1985}, []bool{true, true})
+	defer close(abort)
+	for i := 0; i < 2; i++ {
+		if err := <-results; err == nil {
+			t.Fatalf("expected VerifyHeaders[%d] to fail seal verification", i)
+		}
+	}
+
+	// Give any hypothetical background goroutine a brief moment, then confirm epoch 1 seed was not polluted.
+	time.Sleep(30 * time.Millisecond)
+	rx.epochs.mu.RLock()
+	pollutedSeed, exists := rx.epochs.epochSeeds[1]
+	rx.epochs.mu.RUnlock()
+	if exists {
+		t.Fatalf("unverified batch header polluted epochSeeds[1]: %s", pollutedSeed.Hex())
+	}
+}
+
+func mapsCloneHeaders(src map[common.Hash]*types.Header) map[common.Hash]*types.Header {
+	dst := make(map[common.Hash]*types.Header, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
+}
