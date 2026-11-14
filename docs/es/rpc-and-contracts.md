@@ -67,19 +67,14 @@ curl -s -X POST http://127.0.0.1:38845 \
 Devuelve el índice de época RandomX actual, bloque semilla, hash canónico de semilla, próximo bloque de transición y bloques restantes.
 
 ### `randomx_getFastMode`
-Devuelve `true` si RandomX Fast Mode (dataset de ~2.08 GB) está habilitado en el nodo local, o `false` para Light Mode (caché de ~256 MB).
-
-### `randomx_setFastMode`
-Cambia dinámicamente el nodo local entre Light Mode (`false`) y Fast Mode (`true`) en tiempo de ejecución.
-- **Parámetros**: `[fastMode: boolean]`
-- **Retorno**: `boolean` (`true`)
+Devuelve `true` si RandomX Fast Mode (dataset de ~2.08 GB) está habilitado en el nodo local, o `false` para Light Mode (caché de ~256 MB). Fast Mode se configura al iniciar mediante `--randomx.fast` (`randomx_setFastMode` se omite deliberadamente para evitar picos de asignación de 2.08 GB por RPC en tiempo de ejecución).
 
 ### `randomx_getHashrate`
 Devuelve el hashrate actual del minero CPU local en H/s (`uint64`).
 
 ---
 
-## 2. Comportamiento del Namespace PoW `eth` (`consensus/randomx/api.go`)
+## 2. Comportamiento del Namespace PoW `eth` y Reglas EVM (`consensus/randomx/api.go`)
 
 Para garantizar una minería CPU solitaria e igualitaria dentro del nodo e impedir proxies Stratum externos o granjas puente ASIC/GPU:
 
@@ -89,7 +84,7 @@ Para garantizar una minería CPU solitaria e igualitaria dentro del nodo e imped
 | `eth_submitWork` | **Deshabilitado** — siempre devuelve `false` |
 | `eth_submitHashrate` | **Deshabilitado** — siempre devuelve `false` |
 | `eth_getHashrate` | Devuelve el hashrate en vivo (`uint64`) del minero CPU interno |
-| `eth_sendRawTransaction` | Exige únicamente **Tipo 0 (`LegacyTxType`)** cuando el consenso RandomX está activo; rechaza transacciones EIP-2930, EIP-1559 y EIP-4844 |
+| `eth_sendRawTransaction` | Exige únicamente **Tipo 0 (`LegacyTxType`)** cuando el consenso RandomX está activo; rechaza transacciones tipadas (`0x01` EIP-2930, `0x02` EIP-1559, `0x03` EIP-4844). El opcode `BASEFEE` (`0x48`) de EIP-1559 está inactivo de forma intencional. |
 
 ---
 
@@ -117,7 +112,7 @@ Para garantizar una minería CPU solitaria e igualitaria dentro del nodo e imped
 Desplegado de forma nativa en el Bloque 0 (`params/genesis_rogue.go`) en `0x0000000000000000000000000000000000000020` (`Nonce: 1`).
 
 ### Distribución de Almacenamiento (Storage Layout)
-- **Slot `0`**: `Ownable._owner` (inicializado en génesis a `0xe9aaE535B7971A9AC8C6af0e4B524D02260D3a03`).
+- **Slot `0`**: `Ownable._owner` (inicializado en génesis a `0xe9aaE535B7971A9AC8C6af0e4B524D02260D3a03`). Por seguridad operacional, se recomienda transferir la propiedad a una billetera multifirma (`transferOwnership`) o llamar a `renounceOwnership()` cuando los metadatos estén finalizados.
 - **Slot `1`**: `mapping(address => uint256) private _blocksMined` — actualizado directamente por consenso en `AccumulateRewards` desde el Bloque 1 usando la clave `keccak256(abi.encode(miner, uint256(1)))`.
 
 ### Interfaz EVM de Solo Lectura (`eth_call` / `STATICCALL`)

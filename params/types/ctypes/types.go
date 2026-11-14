@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/big"
 	"sort"
 	"strconv"
 
@@ -398,8 +399,15 @@ func (c *Lyra2Config) String() string {
 
 // RandomXConfig is the consensus engine configuration for Rogue Signal network.
 type RandomXConfig struct {
-	FastMode bool           `json:"fastMode,omitempty"`
-	Treasury common.Address `json:"treasury,omitempty"`
+	FastMode             bool           `json:"fastMode,omitempty"`
+	Treasury             common.Address `json:"treasury,omitempty"`
+	StrictMonotonicBlock *big.Int       `json:"strictMonotonicBlock,omitempty"`
+}
+
+// IsStrictMonotonic reports whether header timestamps must be strictly greater than
+// their parent's timestamp at block num.
+func (c *RandomXConfig) IsStrictMonotonic(num *big.Int) bool {
+	return c != nil && c.StrictMonotonicBlock != nil && num != nil && num.Cmp(c.StrictMonotonicBlock) >= 0
 }
 
 // String implements the stringer interface, returning the consensus engine details.

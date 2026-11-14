@@ -82,9 +82,9 @@ Public Rogue Signal RPC nodes include built-in DoS protection and anti-spoofing 
    - **Fail-Closed Default**: Empty allowlist by default — `X-Forwarded-For` and `X-Real-IP` headers are completely ignored unless `r.RemoteAddr` matches a configured IP or CIDR in `--http.trustedproxies`.
    - **Anti-Spoofing Rightmost Untrusted IP**: When behind multi-hop proxies (Nginx, Caddy, Cloudflare), Core-Rogue parses `X-Forwarded-For` from right to left and selects the **rightmost IP not belonging to `trustedProxies`** (with `X-Real-IP` fallback), preventing clients from spoofing arbitrary `X-Forwarded-For` prefixes.
    - Tested by `TestHTTPServerTrustedProxyAndRetryAfter` (covering spoofing, multi-hop XFF, `X-Real-IP`, WebSocket upgrades, and `limit=0`).
-3. **Opt-In `randomx` RPC Namespace (`cmd/geth/config.go`)**:
+3. **Opt-In Read-Only `randomx` RPC Namespace (`cmd/geth/config.go`)**:
    - Default HTTP/WS modules only expose `eth` (where `EthAPI` exposes read-only `eth_getHashrate` and disabled stubs for `eth_getWork`/`eth_submitWork`/`eth_submitHashrate`).
-   - The `randomx` namespace (which includes `randomx_setFastMode`) is **opt-in** via `--http.api eth,net,web3,randomx` to prevent unauthenticated remote callers from triggering 2.08 GB `FastDataset` allocations on public RPC endpoints.
+   - The `randomx` namespace (`randomx_getConsensusStatus`, `randomx_getEpochInfo`, `randomx_getFastMode`, `randomx_getHashrate`) is **opt-in** via `--http.api eth,net,web3,randomx` and contains no mutating mode switches (Fast Mode is startup-only via `--randomx.fast`).
 
 ---
 

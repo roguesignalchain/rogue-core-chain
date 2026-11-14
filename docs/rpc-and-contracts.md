@@ -67,19 +67,14 @@ curl -s -X POST http://127.0.0.1:38845 \
 Returns the current RandomX epoch index, seed block number, canonical seed hash, next transition block, and remaining blocks.
 
 ### `randomx_getFastMode`
-Returns `true` if RandomX Fast Mode (~2.08 GB dataset) is currently enabled on the local node, or `false` for Light Mode (~256 MB cache).
-
-### `randomx_setFastMode`
-Dynamically switches the local node between Light Mode (`false`) and Fast Mode (`true`) at runtime.
-- **Parameters**: `[fastMode: boolean]`
-- **Returns**: `boolean` (`true`)
+Returns `true` if RandomX Fast Mode (~2.08 GB dataset) is currently enabled on the local node, or `false` for Light Mode (~256 MB cache). Fast Mode is configured at startup via `--randomx.fast` (`randomx_setFastMode` is intentionally omitted to prevent runtime 2.08 GB memory exhaustion over RPC).
 
 ### `randomx_getHashrate`
 Returns the current local CPU miner hashrate in H/s (`uint64`).
 
 ---
 
-## 2. `eth` PoW Namespace Behavior (`consensus/randomx/api.go`)
+## 2. `eth` PoW Namespace & EVM Rules (`consensus/randomx/api.go`)
 
 To enforce egalitarian in-node solo CPU mining and prevent external Stratum proxies or ASIC/GPU bridge pools:
 
@@ -89,7 +84,7 @@ To enforce egalitarian in-node solo CPU mining and prevent external Stratum prox
 | `eth_submitWork` | **Disabled** — always returns `false` |
 | `eth_submitHashrate` | **Disabled** — always returns `false` |
 | `eth_getHashrate` | Returns the live hashrate (`uint64`) of the internal CPU miner |
-| `eth_sendRawTransaction` | Enforces **Type 0 (`LegacyTxType`)** only when RandomX consensus is active; rejects EIP-2930, EIP-1559, and EIP-4844 transactions |
+| `eth_sendRawTransaction` | Enforces **Type 0 (`LegacyTxType`)** only when RandomX consensus is active; rejects typed transactions (`0x01` EIP-2930, `0x02` EIP-1559, `0x03` EIP-4844). EIP-1559 `BASEFEE` (`0x48`) is intentionally inactive. |
 
 ---
 
@@ -117,7 +112,7 @@ To enforce egalitarian in-node solo CPU mining and prevent external Stratum prox
 Deployed natively in Block 0 (`params/genesis_rogue.go`) at `0x0000000000000000000000000000000000000020` (`Nonce: 1`).
 
 ### Storage Layout
-- **Slot `0`**: `Ownable._owner` (initialized at genesis to `0xe9aaE535B7971A9AC8C6af0e4B524D02260D3a03`).
+- **Slot `0`**: `Ownable._owner` (initialized at genesis to `0xe9aaE535B7971A9AC8C6af0e4B524D02260D3a03`). For production governance hardening, transferring ownership via `transferOwnership(<multisig>)` or finalizing immutability with `renounceOwnership()` is recommended.
 - **Slot `1`**: `mapping(address => uint256) private _blocksMined` — mutated directly by consensus in `AccumulateRewards` from Block 1 onwards using key `keccak256(abi.encode(miner, uint256(1)))`.
 
 ### Read-Only EVM Interface (`eth_call` / `STATICCALL`)

@@ -82,9 +82,9 @@ Rogue Signal 公共 RPC 节点内置 DoS 防护与防伪造代理支持：
    - **默认 Fail-Closed**：默认白名单为空——除非 `r.RemoteAddr` 匹配 `--http.trustedproxies` 中配置的 IP 或 CIDR，否则完全忽略 `X-Forwarded-For` 和 `X-Real-IP`。
    - **最右侧非受信任 IP（Rightmost Untrusted IP）**：在多层代理（Nginx、Caddy、Cloudflare）后方，Core-Rogue 从右向左解析 `X-Forwarded-For` 并选取 **最右侧不属于 `trustedProxies` 的 IP**（回退至 `X-Real-IP`），防止客户端伪造 `X-Forwarded-For` 前缀。
    - 已通过 `TestHTTPServerTrustedProxyAndRetryAfter` 测试覆盖。
-3. **`randomx` RPC 命名空间按需启用 (`cmd/geth/config.go`)**：
+3. **只读 `randomx` RPC 命名空间按需启用 (`cmd/geth/config.go`)**：
    - 默认 HTTP/WS 模块仅暴露 `eth`（其中 `EthAPI` 仅提供只读 `eth_getHashrate` 及被禁用的 `eth_getWork`/`eth_submitWork`/`eth_submitHashrate` 存根）。
-   - 包含 `randomx_setFastMode` 的 `randomx` 命名空间需通过 `--http.api eth,net,web3,randomx` 显式启用，防止未授权外部调用方在公共 RPC 上触发 2.08 GB `FastDataset` 内存分配 DoS。
+   - `randomx` 命名空间（`randomx_getConsensusStatus`、`randomx_getEpochInfo`、`randomx_getFastMode`、`randomx_getHashrate`）需通过 `--http.api eth,net,web3,randomx` 显式启用，且不包含运行时模式切换接口（Fast Mode 仅支持启动时通过 `--randomx.fast` 配置）。
 
 ---
 

@@ -20,6 +20,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/metrics"
+	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/params/vars"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/rpc"
@@ -289,6 +290,9 @@ func (rx *RandomX) verifyHeaderWithCache(chain consensus.ChainHeaderReader, head
 		return err
 	}
 	if header.Time <= mtp {
+		return ErrOlderBlockTime
+	}
+	if chain != nil && params.IsStrictMonotonicTimestamp(chain.Config(), header.Number) && header.Time <= parent.Time {
 		return ErrOlderBlockTime
 	}
 	now := rx.currentUnixTime()
@@ -578,9 +582,13 @@ func (rx *RandomX) Prepare(chain consensus.ChainHeaderReader, header *types.Head
 		return consensus.ErrUnknownAncestor
 	}
 
-	// Ensure header.Time strictly exceeds MTP-11(parent) even if recent blocks had out-of-order timestamps
-	if mtp := CalculateMTP11(chain, parent); header.Time <= mtp {
-		header.Time = mtp + 1
+	// Ensure header.Time strictly exceeds MTP-11(parent) (and parent.Time once StrictMonotonicBlock activates)
+	minTime := CalculateMTP11(chain, parent)
+	if params.IsStrictMonotonicTimestamp(chain.Config(), header.Number) && parent.Time > minTime {
+		minTime = parent.Time
+	}
+	if header.Time <= minTime {
+		header.Time = minTime + 1
 	}
 	if now := rx.currentUnixTime(); header.Time > now+MaxFutureDrift {
 		log.Warn("RandomX Prepare: MTP-11 forced block timestamp beyond MaxFutureDrift; block may be rejected until clock catches up",

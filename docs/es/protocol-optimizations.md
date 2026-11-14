@@ -82,9 +82,9 @@ Los nodos RPC públicos de Rogue Signal incorporan protección DoS nativa y sopo
    - **Por Defecto Fail-Closed**: Lista vacía por defecto — `X-Forwarded-For` y `X-Real-IP` se ignoran por completo salvo que `r.RemoteAddr` pertenezca a una IP o CIDR configurado en `--http.trustedproxies`.
    - **IP No Confiable Más a la Derecha (Rightmost Untrusted IP)**: Detrás de proxies multi-salto (Nginx, Caddy, Cloudflare), Core-Rogue recorre `X-Forwarded-For` de derecha a izquierda y selecciona la **primera IP más a la derecha que no pertenezca a `trustedProxies`** (con fallback a `X-Real-IP`), impidiendo la falsificación de prefijos `X-Forwarded-For`.
    - Verificado por `TestHTTPServerTrustedProxyAndRetryAfter`.
-3. **Namespace `randomx` Opt-In (`cmd/geth/config.go`)**:
+3. **Namespace `randomx` Opt-In de Solo Lectura (`cmd/geth/config.go`)**:
    - Los módulos HTTP/WS por defecto solo exponen `eth` (donde `EthAPI` expone `eth_getHashrate` de solo lectura y stubs bloqueados para `eth_getWork`/`eth_submitWork`/`eth_submitHashrate`).
-   - El namespace `randomx` (que incluye `randomx_setFastMode`) es **opt-in** mediante `--http.api eth,net,web3,randomx` para evitar que atacantes remotos disparen asignaciones de `FastDataset` de 2.08 GB en endpoints públicos.
+   - El namespace `randomx` (`randomx_getConsensusStatus`, `randomx_getEpochInfo`, `randomx_getFastMode`, `randomx_getHashrate`) es **opt-in** mediante `--http.api eth,net,web3,randomx` y no expone mutaciones de modo en caliente (Fast Mode solo se configura al arrancar con `--randomx.fast`).
 
 ---
 

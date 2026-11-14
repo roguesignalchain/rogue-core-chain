@@ -8,6 +8,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/params/types/coregeth"
 	"github.com/ethereum/go-ethereum/params/types/ctypes"
 )
 
@@ -260,6 +261,7 @@ func TestLWMAMissingAncestorDeterministicError(t *testing.T) {
 // FakeChainReader is a mock helper for unit tests that provides headers by hash/number.
 type FakeChainReader struct {
 	headers map[common.Hash]*types.Header
+	cfg     ctypes.ChainConfigurator
 }
 
 func NewFakeChainReader() *FakeChainReader {
@@ -271,7 +273,7 @@ func (f *FakeChainReader) AddHeader(h *types.Header) {
 }
 
 func (f *FakeChainReader) Config() ctypes.ChainConfigurator {
-	return nil
+	return f.cfg
 }
 
 func (f *FakeChainReader) CurrentHeader() *types.Header {
@@ -350,5 +352,86 @@ func TestCalculateDifficultyAndMTP11Parity(t *testing.T) {
 			t.Fatalf("block %d: MTP-11 mismatch: got %d/%d, want %d", i, gotMTP, cachedMTP, wantMTP)
 		}
 		parent = h
+	}
+}
+
+func TestStrictMonotonicTimestampForkActivation(t *testing.T) {
+	chain := NewFakeChainReader()
+	chain.cfg = &coregeth.CoreGethChainConfig{
+		RandomX: &ctypes.RandomXConfig{
+			StrictMonotonicBlock: big.NewInt(5),
+		},
+	}
+
+	rx := New(Config{FastMode: false, Threads: -1})
+	rx.nowFunc = func() uint64 { return 2000 }
+
+	genesis := &types.Header{
+		Number:     big.NewInt(0),
+		Time:       1000,
+		Difficulty: big.NewInt(0x10000),
+		GasLimit:   60000000,
+		UncleHash:  types.EmptyUncleHash,
+	}
+	chain.AddHeader(genesis)
+
+	parent := genesis
+	for i := int64(1); i <= 4; i++ {
+		ts := parent.Time + 30
+		if i == 4 {
+			// Pre-fork block 4 has a timestamp < parent (#3) while remaining > MTP-11.
+			ts = parent.Time - 5
+		}
+		diff, err := CalculateDifficulty(chain, ts, parent)
+		if err != nil {
+			t.Fatalf("CalculateDifficulty(%d) failed: %v", i, err)
+		}
+		h := &types.Header{
+			ParentHash: parent.Hash(),
+			Number:     big.NewInt(i),
+			Time:       ts,
+			Difficulty: diff,
+			GasLimit:   60000000,
+			UncleHash:  types.EmptyUncleHash,
+		}
+		if err := rx.VerifyHeader(chain, h, false); err != nil {
+			t.Fatalf("pre-fork VerifyHeader(%d) failed: %v", i, err)
+		}
+		chain.AddHeader(h)
+		parent = h
+	}
+
+	// At block 5 (StrictMonotonicBlock=5), timestamp <= parent.Time (even when > MTP-11) must be rejected.
+	mtp4 := CalculateMTP11(chain, parent)
+	if parent.Time <= mtp4+1 {
+		t.Fatalf("test setup expected parent.Time > MTP11+1 (parent=%d mtp=%d)", parent.Time, mtp4)
+	}
+	diff5, err := CalculateDifficulty(chain, parent.Time, parent)
+	if err != nil {
+		t.Fatalf("CalculateDifficulty(5) failed: %v", err)
+	}
+	bad5 := &types.Header{
+		ParentHash: parent.Hash(),
+		Number:     big.NewInt(5),
+		Time:       parent.Time, // <= parent.Time, though > mtp4
+		Difficulty: diff5,
+		GasLimit:   60000000,
+		UncleHash:  types.EmptyUncleHash,
+	}
+	if err := rx.VerifyHeader(chain, bad5, false); !errors.Is(err, ErrOlderBlockTime) {
+		t.Fatalf("expected ErrOlderBlockTime at StrictMonotonicBlock=5 for time<=parent.Time, got: %v", err)
+	}
+
+	// Prepare at block 5 must bump stale time strictly past parent.Time.
+	prep5 := &types.Header{
+		ParentHash: parent.Hash(),
+		Number:     big.NewInt(5),
+		Time:       mtp4 + 1, // > MTP11 but < parent.Time
+	}
+	if err := rx.Prepare(chain, prep5); err != nil {
+		t.Fatalf("Prepare(5) failed: %v", err)
+	}
+	if prep5.Time != parent.Time+1 {
+		t.Fatalf("expected Prepare to bump time to parent.Time+1 (%d), got %d", parent.Time+1, prep5.Time)
 	}
 }

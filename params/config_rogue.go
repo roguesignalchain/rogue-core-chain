@@ -90,20 +90,33 @@ var (
 	}
 )
 
+func randomXConfig(cfg ctypes.ChainConfigurator) *ctypes.RandomXConfig {
+	switch c := cfg.(type) {
+	case *coregeth.CoreGethChainConfig:
+		if c != nil {
+			return c.RandomX
+		}
+	case *goethereum.ChainConfig:
+		if c != nil {
+			return c.RandomX
+		}
+	}
+	return nil
+}
+
 // ResolveRandomXTreasury returns the configured RandomX treasury address from cfg,
 // falling back to RogueTreasuryAddress if unspecified.
 func ResolveRandomXTreasury(cfg ctypes.ChainConfigurator) common.Address {
-	switch c := cfg.(type) {
-	case *coregeth.CoreGethChainConfig:
-		if c != nil && c.RandomX != nil && c.RandomX.Treasury != (common.Address{}) {
-			return c.RandomX.Treasury
-		}
-	case *goethereum.ChainConfig:
-		if c != nil && c.RandomX != nil && c.RandomX.Treasury != (common.Address{}) {
-			return c.RandomX.Treasury
-		}
+	if rx := randomXConfig(cfg); rx != nil && rx.Treasury != (common.Address{}) {
+		return rx.Treasury
 	}
 	return RogueTreasuryAddress
+}
+
+// IsStrictMonotonicTimestamp reports whether strict timestamp monotonicity (header.Time > parent.Time)
+// is active at blockNumber for the given RandomX chain configuration.
+func IsStrictMonotonicTimestamp(cfg ctypes.ChainConfigurator, blockNumber *big.Int) bool {
+	return randomXConfig(cfg).IsStrictMonotonic(blockNumber)
 }
 
 // MaxExtraDataSizeForChain returns the maximum allowed block ExtraData size in bytes

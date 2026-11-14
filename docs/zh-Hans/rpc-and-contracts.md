@@ -67,19 +67,14 @@ curl -s -X POST http://127.0.0.1:38845 \
 返回当前 RandomX 纪元索引、种子区块号、规范种子哈希、下一切换区块及剩余区块数。
 
 ### `randomx_getFastMode`
-若本地节点当前启用了 RandomX Fast Mode（~2.08 GB 数据集）则返回 `true`，若为 Light Mode（~256 MB 缓存）则返回 `false`。
-
-### `randomx_setFastMode`
-在运行时动态切换本地节点的 Light Mode（`false`）与 Fast Mode（`true`）。
-- **参数**：`[fastMode: boolean]`
-- **返回**：`boolean`（`true`）
+若本地节点当前启用了 RandomX Fast Mode（~2.08 GB 数据集）则返回 `true`，若为 Light Mode（~256 MB 缓存）则返回 `false`。Fast Mode 需在启动时通过 `--randomx.fast` 配置（已刻意移除 `randomx_setFastMode` 以防止通过 RPC 在运行时触发 2.08 GB 内存分配风险）。
 
 ### `randomx_getHashrate`
 返回本地内置 CPU 矿工的当前算力（单位 H/s，`uint64`）。
 
 ---
 
-## 2. `eth` PoW 命名空间行为 (`consensus/randomx/api.go`)
+## 2. `eth` PoW 命名空间与 EVM 规则 (`consensus/randomx/api.go`)
 
 为强制执行平等的节点内单机 CPU 挖矿并阻断外部 Stratum 代理或 ASIC/GPU 桥接矿池：
 
@@ -89,7 +84,7 @@ curl -s -X POST http://127.0.0.1:38845 \
 | `eth_submitWork` | **已禁用** — 始终返回 `false` |
 | `eth_submitHashrate` | **已禁用** — 始终返回 `false` |
 | `eth_getHashrate` | 返回内置 CPU 矿工的实时算力（`uint64`） |
-| `eth_sendRawTransaction` | 当 RandomX 共识激活时仅允许 **Type 0 (`LegacyTxType`)**；拒绝 EIP-2930、EIP-1559 和 EIP-4844 交易 |
+| `eth_sendRawTransaction` | 当 RandomX 共识激活时仅允许 **Type 0 (`LegacyTxType`)**；拒绝类型化交易（`0x01` EIP-2930、`0x02` EIP-1559、`0x03` EIP-4844）。EIP-1559 `BASEFEE` (`0x48`) 默认处于禁用状态。 |
 
 ---
 
@@ -117,7 +112,7 @@ curl -s -X POST http://127.0.0.1:38845 \
 在 Block 0（`params/genesis_rogue.go`）原生部署于地址 `0x0000000000000000000000000000000000000020`（`Nonce: 1`）。
 
 ### 存储布局（Storage Layout）
-- **Slot `0`**：`Ownable._owner`（创世时初始化为 `0xe9aaE535B7971A9AC8C6af0e4B524D02260D3a03`）。
+- **Slot `0`**：`Ownable._owner`（创世时初始化为 `0xe9aaE535B7971A9AC8C6af0e4B524D02260D3a03`）。为加固生产治理安全，建议通过 `transferOwnership` 将所有权转移至多签地址，或在元数据定稿后调用 `renounceOwnership()`。
 - **Slot `1`**：`mapping(address => uint256) private _blocksMined` —— 自 Block 1 起在 `AccumulateRewards` 中由共识直接更新，键为 `keccak256(abi.encode(miner, uint256(1)))`。
 
 ### 只读 EVM 接口 (`eth_call` / `STATICCALL`)

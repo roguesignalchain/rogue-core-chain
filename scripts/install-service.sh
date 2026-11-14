@@ -10,6 +10,8 @@ WORKSPACE_ROOT="$(cd "${CORE_DIR}/.." && pwd -P)"
 MODE="user"
 DATADIR="${HOME}/.local/share/rogue-signal/chaindata"
 MINE="false"
+FAST="false"
+NAT_MODE=""
 THREADS="2"
 COINBASE=""
 
@@ -35,6 +37,8 @@ Options:
   --system             Install as system-wide service (requires root/sudo)
   --datadir <path>     Custom data directory (default: ~/.local/share/rogue-signal/chaindata)
   --mine               Enable mining on service start
+  --fast               Enable RandomX Fast Mode (~2.08 GB RAM) and print HugePages guidance
+  --nat <mode>         NAT traversal mode (default: 'any' in --user, 'none' in --system)
   --threads <num>      Miner threads (default: 2)
   --coinbase <addr>    Miner etherbase payout address
   --help               Display this help
@@ -48,12 +52,22 @@ while [[ $# -gt 0 ]]; do
         --system) MODE="system"; shift ;;
         --datadir) DATADIR="$2"; shift 2 ;;
         --mine) MINE="true"; shift ;;
+        --fast) FAST="true"; shift ;;
+        --nat) NAT_MODE="$2"; shift 2 ;;
         --threads) THREADS="$2"; shift 2 ;;
         --coinbase) COINBASE="$2"; shift 2 ;;
         --help) usage ;;
         *) echo "Unknown argument: $1"; usage ;;
     esac
 done
+
+if [ -z "${NAT_MODE}" ]; then
+    if [ "${MODE}" == "system" ]; then
+        NAT_MODE="none"
+    else
+        NAT_MODE="any"
+    fi
+fi
 
 echo "=== [Rogue Signal] Installing Node Service (${MODE} mode) ==="
 
@@ -65,15 +79,20 @@ fi
 mkdir -p "${DATADIR}"
 
 # Initialize genesis if not yet initialized
-if [ ! -d "${DATADIR}/geth/chaindata" ]; then
+if [ ! -d "${DATADIR}/rogue/chaindata" ] && [ ! -d "${DATADIR}/geth/chaindata" ]; then
     echo "Initializing embedded Rogue Signal genesis block (Chain ID 800055)..."
     "${BIN_SRC}" --rogue --datadir "${DATADIR}" init
 fi
 
-# Configure miner arguments
+# Configure miner and RandomX performance arguments
 EXTRA_ARGS=""
+if [ "${FAST}" == "true" ]; then
+    EXTRA_ARGS="--randomx.fast"
+    echo "NOTE (HugePages): For peak RandomX Fast Mode performance (~2.5 GB), ensure vm.nr_hugepages=1280 is configured:"
+    echo "  sudo sysctl -w vm.nr_hugepages=1280"
+fi
 if [ "${MINE}" == "true" ]; then
-    EXTRA_ARGS="--mine --miner.threads ${THREADS}"
+    EXTRA_ARGS="${EXTRA_ARGS} --mine --miner.threads ${THREADS}"
     if [ -n "${COINBASE}" ]; then
         EXTRA_ARGS="${EXTRA_ARGS} --miner.etherbase ${COINBASE}"
     fi
@@ -91,11 +110,15 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=${BIN_SRC} --rogue --datadir ${DATADIR} --http --http.addr 127.0.0.1 --http.port 38845 --http.api eth,net,web3,randomx --port 38888 --nat any --syncmode full --cache 256 ${EXTRA_ARGS}
+ExecStart=${BIN_SRC} --rogue --datadir ${DATADIR} --http --http.addr 127.0.0.1 --http.port 38845 --http.api eth,net,web3,randomx --port 38888 --nat ${NAT_MODE} --syncmode full --cache 256 ${EXTRA_ARGS}
 Restart=always
 RestartSec=5s
 KillSignal=SIGTERM
 TimeoutStopSec=15s
+NoNewPrivileges=true
+PrivateTmp=true
+LockPersonality=true
+RestrictSUIDSGID=true
 
 [Install]
 WantedBy=default.target
@@ -128,12 +151,23 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=${SERVICE_USER}
-ExecStart=${BIN_SRC} --rogue --datadir ${DATADIR} --http --http.addr 127.0.0.1 --http.port 38845 --http.api eth,net,web3,randomx --port 38888 --nat any --syncmode full --cache 256 ${EXTRA_ARGS}
+ExecStart=${BIN_SRC} --rogue --datadir ${DATADIR} --http --http.addr 127.0.0.1 --http.port 38845 --http.api eth,net,web3,randomx --port 38888 --nat ${NAT_MODE} --syncmode full --cache 256 ${EXTRA_ARGS}
 Restart=always
 RestartSec=5s
 LimitNOFILE=65535
+LimitMEMLOCK=infinity
 TimeoutStopSec=30s
 KillSignal=SIGTERM
+# Hardening (MemoryDenyWriteExecute is intentionally omitted so RandomX JIT executes natively)
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=${DATADIR}
+ProtectControlGroups=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+RestrictSUIDSGID=true
+LockPersonality=true
 
 [Install]
 WantedBy=multi-user.target
