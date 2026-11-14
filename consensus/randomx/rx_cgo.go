@@ -4,7 +4,79 @@ package randomx
 #cgo CFLAGS: -I${SRCDIR}/include -O3
 #cgo LDFLAGS: -L${SRCDIR}/lib -lrandomx -lstdc++ -lm -lpthread
 #include "randomx.h"
+#include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
+
+static inline void rx_put_le64(uint8_t *dst, uint64_t v) {
+	dst[0] = (uint8_t)(v);
+	dst[1] = (uint8_t)(v >> 8);
+	dst[2] = (uint8_t)(v >> 16);
+	dst[3] = (uint8_t)(v >> 24);
+	dst[4] = (uint8_t)(v >> 32);
+	dst[5] = (uint8_t)(v >> 40);
+	dst[6] = (uint8_t)(v >> 48);
+	dst[7] = (uint8_t)(v >> 56);
+}
+
+static inline int rx_hash_meets_target(const uint8_t *hash, const uint8_t *target_be) {
+	for (int i = 0; i < 32; i++) {
+		uint8_t b = hash[31 - i];
+		uint8_t t = target_be[i];
+		if (b < t) {
+			return 1;
+		}
+		if (b > t) {
+			return 0;
+		}
+	}
+	return 1;
+}
+
+static uint32_t rx_mine_batch(
+	randomx_vm *vm,
+	const uint8_t *seal_hash,
+	uint64_t start_nonce,
+	uint32_t count,
+	const uint8_t *target_be,
+	uint64_t *win_nonce_out,
+	uint8_t *win_hash_out,
+	int *found_out
+) {
+	*found_out = 0;
+	if (vm == NULL || count == 0) {
+		return 0;
+	}
+
+	uint8_t blob[76];
+	memset(blob, 0, sizeof(blob));
+	memcpy(blob, seal_hash, 32);
+
+	rx_put_le64(blob + 39, start_nonce);
+	randomx_calculate_hash_first(vm, blob, sizeof(blob));
+
+	uint8_t out_hash[32];
+	for (uint32_t i = 1; i < count; i++) {
+		rx_put_le64(blob + 39, start_nonce + (uint64_t)i);
+		randomx_calculate_hash_next(vm, blob, sizeof(blob), out_hash);
+		if (rx_hash_meets_target(out_hash, target_be)) {
+			*win_nonce_out = start_nonce + (uint64_t)(i - 1);
+			memcpy(win_hash_out, out_hash, 32);
+			*found_out = 1;
+			uint8_t dummy[32];
+			randomx_calculate_hash_last(vm, dummy);
+			return i;
+		}
+	}
+
+	randomx_calculate_hash_last(vm, out_hash);
+	if (rx_hash_meets_target(out_hash, target_be)) {
+		*win_nonce_out = start_nonce + (uint64_t)(count - 1);
+		memcpy(win_hash_out, out_hash, 32);
+		*found_out = 1;
+	}
+	return count;
+}
 */
 import "C"
 import (
@@ -494,6 +566,37 @@ func (ctx *RxContext) CalculateHashWithVM(vm *VM, input []byte) ([32]byte, error
 	runtime.KeepAlive(input)
 
 	return output, nil
+}
+
+// MineBatchWithVM evaluates up to count consecutive nonces starting at startNonce
+// using RandomX's pipelined first/next/last API in a single CGo transition.
+// It stops as soon as a hash meets targetBE or count hashes have been evaluated.
+func (ctx *RxContext) MineBatchWithVM(vm *VM, sealHash [32]byte, startNonce uint64, count uint32, targetBE [32]byte) (winNonce uint64, winHash [32]byte, attempted uint32, found bool, err error) {
+	if vm == nil || vm.raw == nil || vm.destroyed.Load() {
+		return 0, winHash, 0, false, errors.New("invalid RandomX VM")
+	}
+	if count == 0 {
+		return 0, winHash, 0, false, nil
+	}
+
+	var (
+		cWinNonce C.uint64_t
+		cFound    C.int
+	)
+	attempts := C.rx_mine_batch(
+		vm.raw,
+		(*C.uint8_t)(unsafe.Pointer(&sealHash[0])),
+		C.uint64_t(startNonce),
+		C.uint32_t(count),
+		(*C.uint8_t)(unsafe.Pointer(&targetBE[0])),
+		&cWinNonce,
+		(*C.uint8_t)(unsafe.Pointer(&winHash[0])),
+		&cFound,
+	)
+	runtime.KeepAlive(sealHash)
+	runtime.KeepAlive(targetBE)
+
+	return uint64(cWinNonce), winHash, uint32(attempts), cFound != 0, nil
 }
 
 // CalculateHash calculates the 32-byte RandomX hash using a pooled VM and atomic reference counting.

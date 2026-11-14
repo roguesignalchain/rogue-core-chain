@@ -396,9 +396,24 @@ func (rx *RandomX) VerifyHeaders(chain consensus.ChainHeaderReader, headers []*t
 			return ok
 		}
 
-		// Producer: run Phase 1 fail-fast checks and dispatch Phase 2 seal checks to worker pool
+		// Producer: run Phase 1 fail-fast checks, pre-warm epoch verify contexts per batch, and dispatch Phase 2 seal checks
 		go func() {
 			targetByHash := make(map[common.Hash]*big.Int, n+DefaultLWMAWindow)
+			batchCtxs := make(map[common.Hash]*RxContext, 2)
+			var (
+				workerWG  sync.WaitGroup
+				lastHash  common.Hash
+				lastEpoch uint64
+				lastSeed  common.Hash
+				hasLast   bool
+			)
+			defer func() {
+				workerWG.Wait()
+				for _, bctx := range batchCtxs {
+					bctx.DecRef()
+				}
+			}()
+
 			for i, header := range headers {
 				select {
 				case <-abort:
@@ -455,6 +470,48 @@ func (rx *RandomX) VerifyHeaders(chain consensus.ChainHeaderReader, headers []*t
 					continue
 				}
 
+				// Fast pre-check before touching any RandomX CGo context
+				if header.Difficulty == nil || header.Difficulty.Sign() <= 0 ||
+					!HashMeetsTarget(header.MixDigest, TargetToBytes32(DifficultyToTarget(header.Difficulty))) {
+					errs[i] = ErrInvalidPoW
+					markFailed(headerHash)
+					close(done[i])
+					continue
+				}
+
+				// O(1) batch seed reuse for contiguous headers within the same epoch
+				epoch := EpochNumber(number)
+				var seed common.Hash
+				if hasLast && header.ParentHash == lastHash && epoch == lastEpoch {
+					seed = lastSeed
+				} else {
+					var err error
+					seed, err = rx.epochs.ResolveSeedForHeader(header, batchReader)
+					if err != nil {
+						errs[i] = fmt.Errorf("failed to get RandomX context for block %d: %w", number, err)
+						markFailed(headerHash)
+						close(done[i])
+						continue
+					}
+					lastEpoch = epoch
+					lastSeed = seed
+				}
+				lastHash = headerHash
+				hasLast = true
+
+				bctx, ok := batchCtxs[seed]
+				if !ok {
+					var err error
+					bctx, err = rx.epochs.getContextBySeedWithMode(epoch, seed, false, true)
+					if err != nil {
+						errs[i] = fmt.Errorf("failed to get RandomX context for block %d: %w", number, err)
+						markFailed(headerHash)
+						close(done[i])
+						continue
+					}
+					batchCtxs[seed] = bctx
+				}
+
 				// Phase 2: Parallel RandomX PoW seal verification
 				select {
 				case <-abort:
@@ -463,9 +520,11 @@ func (rx *RandomX) VerifyHeaders(chain consensus.ChainHeaderReader, headers []*t
 				case sem <- struct{}{}:
 				}
 
-				go func(idx int, h *types.Header, hHash common.Hash) {
+				workerWG.Add(1)
+				go func(idx int, h *types.Header, hHash common.Hash, vctx *RxContext) {
 					defer func() {
 						<-sem
+						workerWG.Done()
 						close(done[idx])
 					}()
 					select {
@@ -478,11 +537,11 @@ func (rx *RandomX) VerifyHeaders(chain consensus.ChainHeaderReader, headers []*t
 						markFailed(hHash)
 						return
 					}
-					if err := rx.VerifySeal(batchReader, h); err != nil {
+					if err := rx.verifySealWithContext(batchReader, h, vctx); err != nil {
 						errs[idx] = err
 						markFailed(hHash)
 					}
-				}(i, header, headerHash)
+				}(i, header, headerHash, bctx)
 			}
 		}()
 
@@ -651,6 +710,10 @@ func (rx *RandomX) VerifySeal(chain consensus.ChainHeaderReader, header *types.H
 	}
 	defer ctx.DecRef()
 
+	return rx.verifySealWithContext(chain, header, ctx)
+}
+
+func (rx *RandomX) verifySealWithContext(chain consensus.ChainHeaderReader, header *types.Header, ctx *RxContext) error {
 	sealHash := rx.SealHash(header)
 	input := MiningInput(sealHash, header.Nonce.Uint64())
 
@@ -666,7 +729,8 @@ func (rx *RandomX) VerifySeal(chain consensus.ChainHeaderReader, header *types.H
 
 	// Precompute next epoch cache/dataset in the background for non-mining validators/RPC nodes
 	// when validating a tip block inside the SeedLag window.
-	if chain != nil {
+	if chain != nil && header.Number != nil && header.Number.IsUint64() {
+		number := header.Number.Uint64()
 		if head := chain.CurrentHeader(); head != nil && head.Number != nil && head.Number.IsUint64() && number >= head.Number.Uint64() {
 			rx.epochs.PrecomputeNextEpoch(number, chain)
 		}
@@ -790,50 +854,43 @@ func (rx *RandomX) Seal(chain consensus.ChainHeaderReader, block *types.Block, r
 				}
 				defer ctx.ReleaseVM(vm)
 
-				// Pre-allocate the 76-byte RandomX mining blob once per worker goroutine
-				var input [MiningBlobSize]byte
-				copy(input[:32], sealHash.Bytes())
+				// Use CGo pipelined batch hashing (randomx_calculate_hash_first/next/last) to amortize
+				// CGo boundary crossings and target checks across consecutive nonces.
+				batchSize := uint32(4)
+				if ctx.fastMode {
+					batchSize = 32
+				}
+				var sealHashArr [32]byte
+				copy(sealHashArr[:], sealHash.Bytes())
 
 				// Each thread starts searching from an independent cryptographically seeded nonce offset
 				nonce := baseNonce + uint64(tid)*0x100000000
-				var attempts int64
 
 				for {
 					select {
 					case <-stop:
-						rx.markAttempts(attempts)
 						return
 					case <-found:
-						rx.markAttempts(attempts)
 						return
 					default:
 					}
 
-					attempts++
-					if (attempts % 64) == 0 {
-						rx.markAttempts(attempts)
-						attempts = 0
-					}
-
-					binary.LittleEndian.PutUint64(input[39:], nonce)
-					rxHash, err := ctx.CalculateHashWithVM(vm, input[:])
+					winNonce, rxHash, attempted, ok, err := ctx.MineBatchWithVM(vm, sealHashArr, nonce, batchSize, targetBE)
+					rx.markAttempts(int64(attempted))
 					if err != nil {
-						rx.markAttempts(attempts)
 						log.Debug("RandomX seal worker stopped due to context error", "tid", tid, "number", number, "err", err)
 						return
 					}
-
-					if HashMeetsTarget(rxHash, targetBE) {
-						rx.markAttempts(attempts)
+					if ok {
 						abortOnce.Do(func() {
-							foundNonce = nonce
+							foundNonce = winNonce
 							foundHash = rxHash
 							close(found)
 						})
 						return
 					}
 
-					nonce++
+					nonce += uint64(attempted)
 				}
 			}(threadID)
 		}

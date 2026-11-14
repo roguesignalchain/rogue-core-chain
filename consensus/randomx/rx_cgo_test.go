@@ -1,8 +1,11 @@
 package randomx
 
 import (
+	"bytes"
 	"encoding/hex"
 	"testing"
+
+	"github.com/ethereum/go-ethereum/common"
 )
 
 func TestOfficialRandomXVectorsLightMode(t *testing.T) {
@@ -141,5 +144,157 @@ func TestHugePagesTryWithFallback(t *testing.T) {
 		t.Fatalf("hash mismatch: got %s, want %s", hex.EncodeToString(hash[:]), expectedHex)
 	}
 	_ = ctx.LargePages()
+}
+
+func reverseToTargetBE(h [32]byte) (targetBE [32]byte) {
+	for i := 0; i < 32; i++ {
+		targetBE[i] = h[31-i]
+	}
+	return targetBE
+}
+
+func TestMineBatchWithVMParity(t *testing.T) {
+	ctx, err := NewRxContext([]byte("batch-mine-test-seed"), false)
+	if err != nil {
+		t.Fatalf("NewRxContext failed: %v", err)
+	}
+	defer ctx.Close()
+
+	if !ctx.IncRef() {
+		t.Fatal("IncRef failed")
+	}
+	defer ctx.DecRef()
+
+	vm, err := ctx.AcquireVM()
+	if err != nil {
+		t.Fatalf("AcquireVM failed: %v", err)
+	}
+	defer ctx.ReleaseVM(vm)
+
+	sealHash := common.HexToHash("0x112233445566778899aabbccddeeff00112233445566778899aabbccddeeff00")
+	var sealArr [32]byte
+	copy(sealArr[:], sealHash.Bytes())
+
+	// Precompute 8 reference single hashes
+	var ref [8][32]byte
+	for i := uint64(0); i < 8; i++ {
+		h, err := ctx.CalculateHashWithVM(vm, MiningInput(sealHash, 100+i))
+		if err != nil {
+			t.Fatalf("CalculateHashWithVM(%d) failed: %v", i, err)
+		}
+		ref[i] = h
+	}
+
+	// 1. count == 1 match on exact boundary target
+	targetSingle := reverseToTargetBE(ref[0])
+	winNonce, winHash, attempted, found, err := ctx.MineBatchWithVM(vm, sealArr, 100, 1, targetSingle)
+	if err != nil || !found || attempted != 1 || winNonce != 100 || winHash != ref[0] {
+		t.Fatalf("count=1 match mismatch: nonce=%d found=%v attempted=%d err=%v", winNonce, found, attempted, err)
+	}
+
+	// 2. Full miss (zero target) followed by VM cleanliness verification
+	var zeroTarget [32]byte
+	_, _, attempted, found, err = ctx.MineBatchWithVM(vm, sealArr, 100, 4, zeroTarget)
+	if err != nil || found || attempted != 4 {
+		t.Fatalf("miss mismatch: found=%v attempted=%d err=%v", found, attempted, err)
+	}
+	afterHash, err := ctx.CalculateHashWithVM(vm, MiningInput(sealHash, 100))
+	if err != nil || afterHash != ref[0] {
+		t.Fatalf("VM state corrupted after MineBatchWithVM: err=%v eq=%v", err, bytes.Equal(afterHash[:], ref[0][:]))
+	}
+
+	// 3. Find first index k > 0 strictly smaller than all earlier hashes in ref[0..7]
+	targetIdx := -1
+	for k := 1; k < len(ref); k++ {
+		tk := reverseToTargetBE(ref[k])
+		earlierMatches := false
+		for j := 0; j < k; j++ {
+			if HashMeetsTarget(ref[j], tk) {
+				earlierMatches = true
+				break
+			}
+		}
+		if !earlierMatches {
+			targetIdx = k
+			break
+		}
+	}
+	if targetIdx < 0 {
+		t.Skip("unlikely hash ordering across 8 nonces")
+	}
+
+	// Hit mid-batch (or at batch tail if targetIdx == len(ref)-1)
+	targetMid := reverseToTargetBE(ref[targetIdx])
+	winNonce, winHash, attempted, found, err = ctx.MineBatchWithVM(vm, sealArr, 100, uint32(len(ref)), targetMid)
+	if err != nil {
+		t.Fatalf("MineBatchWithVM failed: %v", err)
+	}
+	wantNonce := uint64(100 + targetIdx)
+	if !found || winNonce != wantNonce || winHash != ref[targetIdx] || attempted != uint32(targetIdx+1) {
+		t.Fatalf("mid-batch mismatch: got found=%v nonce=%d attempted=%d, want found=true nonce=%d attempted=%d",
+			found, winNonce, attempted, wantNonce, targetIdx+1)
+	}
+
+	// Subsequent hash call on same VM must remain bit-exact after early break
+	postBreakHash, err := ctx.CalculateHashWithVM(vm, MiningInput(sealHash, 107))
+	if err != nil || postBreakHash != ref[7] {
+		t.Fatalf("VM state corrupted after early win break: err=%v", err)
+	}
+}
+
+func BenchmarkCalculateHashSingle(b *testing.B) {
+	ctx, err := NewRxContext([]byte("bench-seed"), false)
+	if err != nil {
+		b.Fatalf("NewRxContext failed: %v", err)
+	}
+	defer ctx.Close()
+	if !ctx.IncRef() {
+		b.Fatal("IncRef failed")
+	}
+	defer ctx.DecRef()
+	vm, err := ctx.AcquireVM()
+	if err != nil {
+		b.Fatalf("AcquireVM failed: %v", err)
+	}
+	defer ctx.ReleaseVM(vm)
+
+	blob := MiningInput(common.HexToHash("0x11223344"), 1)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := ctx.CalculateHashWithVM(vm, blob); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkMineBatch(b *testing.B) {
+	ctx, err := NewRxContext([]byte("bench-seed"), false)
+	if err != nil {
+		b.Fatalf("NewRxContext failed: %v", err)
+	}
+	defer ctx.Close()
+	if !ctx.IncRef() {
+		b.Fatal("IncRef failed")
+	}
+	defer ctx.DecRef()
+	vm, err := ctx.AcquireVM()
+	if err != nil {
+		b.Fatalf("AcquireVM failed: %v", err)
+	}
+	defer ctx.ReleaseVM(vm)
+
+	var sealArr, zeroTarget [32]byte
+	sealArr[0] = 0x11
+	const batch = 16
+	b.ResetTimer()
+	for i := 0; i < b.N; i += batch {
+		n := uint32(batch)
+		if b.N-i < batch {
+			n = uint32(b.N - i)
+		}
+		if _, _, _, _, err := ctx.MineBatchWithVM(vm, sealArr, uint64(i), n, zeroTarget); err != nil {
+			b.Fatal(err)
+		}
+	}
 }
 
