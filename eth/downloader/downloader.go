@@ -34,6 +34,7 @@ import (
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/event"
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/params/types/ctypes"
 	"github.com/ethereum/go-ethereum/params/vars"
 	"github.com/ethereum/go-ethereum/triedb"
 )
@@ -223,6 +224,10 @@ type BlockChain interface {
 	// TrieDB retrieves the low level trie database used for interacting
 	// with trie nodes.
 	TrieDB() *triedb.Database
+}
+
+type chainConfigProvider interface {
+	Config() ctypes.ChainConfigurator
 }
 
 // New creates a new downloader to fetch hashes and blocks from remote peers.
@@ -1486,6 +1491,9 @@ func (d *Downloader) processHeaders(origin uint64, td, ttd *big.Int, beaconMode 
 
 					frequency := fsHeaderCheckFrequency
 					if chunkHeaders[len(chunkHeaders)-1].Number.Uint64()+uint64(fsHeaderForceVerify) > pivot {
+						frequency = 1
+					} else if cp, ok := d.blockchain.(chainConfigProvider); ok && cp.Config() != nil && cp.Config().GetConsensusEngineType().IsRandomX() {
+						// Verify every RandomX PoW seal during snap sync rather than sampling 1/100.
 						frequency = 1
 					}
 					// Although the received headers might be all valid, a legacy

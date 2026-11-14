@@ -266,6 +266,8 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		if *config.ECBP1100NoDisable {
 			eth.blockchain.ArtificialFinalityNoDisable(1)
 		}
+	} else if eth.blockchain.Config().GetConsensusEngineType().IsRandomX() {
+		eth.blockchain.ArtificialFinalityNoDisable(1)
 	}
 
 	if config.TxPool.Journal != "" {

@@ -27,6 +27,7 @@ import (
 	"github.com/ethereum/go-ethereum/eth/downloader"
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/metrics"
 )
 
 const (
@@ -45,6 +46,9 @@ var (
 	// This prevents an abandoned victim of an eclipse attack from being forever destitute.
 	// Rogue Signal block target is 30s; 30 blocks * 30s = 900s (15 minutes).
 	artificialFinalitySafetyInterval = 30 * 30 * time.Second
+
+	afEnabledMeter  = metrics.NewRegisteredMeter("eth/finality/ecbp1100/enabled", nil)
+	afDisabledMeter = metrics.NewRegisteredMeter("eth/finality/ecbp1100/disabled", nil)
 )
 
 // artificialFinalitySafetyLoop compares our local head across timer intervals.
@@ -68,6 +72,9 @@ func (h *handler) artificialFinalitySafetyLoop() {
 				// chain getting starved.
 				if time.Since(time.Unix(int64(h.chain.CurrentHeader().Time), 0)) > artificialFinalitySafetyInterval {
 					h.chain.EnableArtificialFinality(false, "reason", "stale safety interval", "interval", artificialFinalitySafetyInterval)
+					if !h.chain.IsArtificialFinalityEnabled() {
+						afDisabledMeter.Mark(1)
+					}
 				}
 			}
 		case <-h.quitSync:
@@ -206,6 +213,9 @@ func (cs *chainSyncer) nextSyncOp() *chainSyncOp {
 		if cs.handler.peers.len() < minArtificialFinalityPeers {
 			// If artificial finality state is forcefully set (overridden) this will just be a noop.
 			cs.handler.chain.EnableArtificialFinality(false, "reason", "low peers", "peers", cs.handler.peers.len())
+			if !cs.handler.chain.IsArtificialFinalityEnabled() {
+				afDisabledMeter.Mark(1)
+			}
 		}
 	}
 	if cs.handler.peers.len() < minPeers {
@@ -238,6 +248,9 @@ func (cs *chainSyncer) nextSyncOp() *chainSyncOp {
 			// - AF is disabled (so we should reenable).
 			!cs.handler.chain.IsArtificialFinalityEnabled() {
 			cs.handler.chain.EnableArtificialFinality(true, "reason", "synced", "peers", cs.handler.peers.len())
+			if cs.handler.chain.IsArtificialFinalityEnabled() {
+				afEnabledMeter.Mark(1)
+			}
 		}
 		if !cs.handler.snapSync.Load() && !cs.handler.synced.Load() {
 			cs.handler.enableSyncedFeatures()

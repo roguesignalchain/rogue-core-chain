@@ -1265,6 +1265,11 @@ func setBootstrapNodes(ctx *cli.Context, cfg *p2p.Config) {
 	cfg.BootstrapNodes = mustParseBootnodes(urls)
 }
 
+// IsRogueNetwork reports whether the CLI context targets the Rogue Signal network.
+func IsRogueNetwork(ctx *cli.Context) bool {
+	return isRogueNetwork(ctx)
+}
+
 // isRogueNetwork returns true when --rogue is explicitly set, or when --networkid 800055
 // is specified without any conflicting explicit chain/developer flag.
 func isRogueNetwork(ctx *cli.Context) bool {
@@ -1282,6 +1287,54 @@ func isRogueNetwork(ctx *cli.Context) bool {
 		!ctx.Bool(HoleskyFlag.Name) &&
 		!ctx.Bool(DeveloperFlag.Name) &&
 		!ctx.Bool(DeveloperPoWFlag.Name)
+}
+
+func hasExplicitNetworkFlag(ctx *cli.Context) bool {
+	return ctx.Bool(RogueFlag.Name) ||
+		ctx.IsSet(NetworkIdFlag.Name) ||
+		ctx.Bool(MainnetFlag.Name) ||
+		ctx.Bool(ClassicFlag.Name) ||
+		ctx.Bool(MordorFlag.Name) ||
+		ctx.Bool(SepoliaFlag.Name) ||
+		ctx.Bool(MintMeFlag.Name) ||
+		ctx.Bool(HoleskyFlag.Name) ||
+		ctx.Bool(DeveloperFlag.Name) ||
+		ctx.Bool(DeveloperPoWFlag.Name)
+}
+
+// ensureRogueFromExistingDataDir inspects an existing chaindata directory when no
+// explicit network flag was passed. If Block 0 matches RogueGenesisHash, it enables
+// RogueFlag so P2P, ports, sync mode, and chain config do not silently fall back to Mainnet.
+func ensureRogueFromExistingDataDir(ctx *cli.Context, cfg *node.Config) {
+	if hasExplicitNetworkFlag(ctx) || cfg.DataDir == "" {
+		return
+	}
+	clientID := cfg.Name
+	if clientID == "" {
+		clientID = "geth"
+	}
+	chaindataDir := filepath.Join(cfg.DataDir, clientID, "chaindata")
+	if _, err := os.Stat(chaindataDir); err != nil {
+		return
+	}
+	db, err := rawdb.Open(rawdb.OpenOptions{
+		Type:              ctx.String(DBEngineFlag.Name),
+		Directory:         chaindataDir,
+		AncientsDirectory: filepath.Join(chaindataDir, "ancient"),
+		ReadOnly:          true,
+	})
+	if err != nil {
+		return
+	}
+	genesisHash := rawdb.ReadCanonicalHash(db, 0)
+	db.Close()
+	if genesisHash != params.RogueGenesisHash {
+		return
+	}
+	log.Warn("Detected existing Rogue Signal chaindata without --rogue flag; activating Rogue Signal network profile", "datadir", cfg.DataDir)
+	if err := ctx.Set(RogueFlag.Name, "true"); err != nil {
+		log.Warn("Failed to activate --rogue flag automatically", "err", err)
+	}
 }
 
 // resolveRogueBootnodes returns dynamic bootnodes from ROGUE_BOOTNODES (if set)
@@ -1663,13 +1716,14 @@ func SetP2PConfig(ctx *cli.Context, cfg *p2p.Config) {
 
 // SetNodeConfig applies node-related command line flags to the config.
 func SetNodeConfig(ctx *cli.Context, cfg *node.Config) {
+	SetDataDir(ctx, cfg)
+	ensureRogueFromExistingDataDir(ctx, cfg)
 	SetP2PConfig(ctx, &cfg.P2P)
 	setIPC(ctx, cfg)
 	setHTTP(ctx, cfg)
 	setGraphQL(ctx, cfg)
 	setWS(ctx, cfg)
 	setNodeUserIdent(ctx, cfg)
-	SetDataDir(ctx, cfg)
 	setSmartCard(ctx, cfg)
 
 	if isRogueNetwork(ctx) {

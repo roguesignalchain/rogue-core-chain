@@ -166,12 +166,17 @@ func newHandler(config *handlerConfig) (*handler, error) {
 		//   time. But we don't have any recent state for full sync.
 		// In these cases however it's safe to reenable snap sync.
 		fullBlock, snapBlock := h.chain.CurrentBlock(), h.chain.CurrentSnapBlock()
-		if fullBlock.Number.Uint64() == 0 && snapBlock.Number.Uint64() > 0 {
+		isRandomX := config.Chain.Config() != nil && config.Chain.Config().GetConsensusEngineType().IsRandomX()
+		if fullBlock.Number.Uint64() == 0 && snapBlock.Number.Uint64() > 0 && (!isRandomX || config.Chain.Snapshots() != nil) {
 			h.snapSync.Store(true)
 			log.Warn("Switch sync mode from full sync to snap sync", "reason", "snap sync incomplete")
 		} else if !h.chain.HasState(fullBlock.Root) {
-			h.snapSync.Store(true)
-			log.Warn("Switch sync mode from full sync to snap sync", "reason", "head state missing")
+			if isRandomX && config.Chain.Snapshots() == nil {
+				log.Warn("Head state missing in RandomX full sync with snapshots disabled; keeping full sync", "number", fullBlock.Number, "hash", fullBlock.Hash())
+			} else {
+				h.snapSync.Store(true)
+				log.Warn("Switch sync mode from full sync to snap sync", "reason", "head state missing")
+			}
 		}
 	} else {
 		head := h.chain.CurrentBlock()
